@@ -6,6 +6,7 @@ from typing import Optional
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,43 @@ class FirestoreService:
             return False
         ref.delete()
         return True
+
+    # ------------------------------------------------------------------ #
+    # Users (document id = lower-cased email)                              #
+    # ------------------------------------------------------------------ #
+
+    def get_user(self, email: str) -> Optional[dict]:
+        doc = self._db.collection("users").document(email).get()
+        return {"email": doc.id, **doc.to_dict()} if doc.exists else None
+
+    def list_users(self) -> list[dict]:
+        return [{"email": d.id, **d.to_dict()} for d in self._db.collection("users").stream()]
+
+    def set_user(self, email: str, data: dict) -> dict:
+        self._db.collection("users").document(email).set(data)
+        return {"email": email, **data}
+
+    def update_user(self, email: str, data: dict) -> Optional[dict]:
+        ref = self._db.collection("users").document(email)
+        if not ref.get().exists:
+            return None
+        ref.update(data)
+        return {"email": email, **ref.get().to_dict()}
+
+    def delete_user(self, email: str) -> bool:
+        ref = self._db.collection("users").document(email)
+        if not ref.get().exists:
+            return False
+        ref.delete()
+        return True
+
+    def count_admins(self) -> int:
+        docs = (
+            self._db.collection("users")
+            .where(filter=FieldFilter("role", "==", "admin"))
+            .stream()
+        )
+        return sum(1 for _ in docs)
 
     # ------------------------------------------------------------------ #
     # Settings documents                                                   #

@@ -1,8 +1,41 @@
 import axios from 'axios';
+import { signOut } from 'firebase/auth';
+import { auth } from '../firebase';
 
-const BASE_URL = 'http://localhost:8000';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 const http = axios.create({ baseURL: BASE_URL });
+
+// Attach the Firebase ID token to every request (getIdToken refreshes it when needed)
+http.interceptors.request.use(async (config) => {
+  const user = auth?.currentUser;
+  if (user) {
+    config.headers.Authorization = `Bearer ${await user.getIdToken()}`;
+  }
+  return config;
+});
+
+// Session no longer valid on the server → sign out (AuthGuard then redirects to /login)
+http.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    if (error.response?.status === 401 && auth?.currentUser) {
+      await signOut(auth);
+    }
+    return Promise.reject(error);
+  }
+);
+
+export const authApi = {
+  me: () => http.get('/api/auth/me'),
+};
+
+export const usersApi = {
+  list: () => http.get('/api/users'),
+  create: (data) => http.post('/api/users', data),
+  update: (email, data) => http.patch(`/api/users/${encodeURIComponent(email)}`, data),
+  remove: (email) => http.delete(`/api/users/${encodeURIComponent(email)}`),
+};
 
 export const jobsApi = {
   list: () => http.get('/api/jobs'),

@@ -2,6 +2,7 @@ import { Briefcase } from 'lucide-react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { HR_MODULES } from '../constants/modules';
 import GlobalSearch from './GlobalSearch';
+import UserMenu from './UserMenu';
 
 export default function Navbar() {
   const { pathname } = useLocation();
@@ -40,6 +41,7 @@ export default function Navbar() {
           </div>
 
           <div className="flex-1 flex justify-end">{inJobsModule && <GlobalSearch />}</div>
+          <UserMenu />
         </div>
       </div>
     </nav>
