@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -12,9 +12,19 @@ logger = logging.getLogger(__name__)
 
 
 class FirestoreService:
-    def __init__(self, credentials_path: str) -> None:
+    def __init__(self, credentials_source: Union[dict, str]) -> None:
+        """`credentials_source` is a service-account dict or a path to its JSON file."""
         if not firebase_admin._apps:
-            cred = credentials.Certificate(credentials_path)
+            try:
+                cred = credentials.Certificate(credentials_source)
+            except (IOError, ValueError) as exc:
+                where = "FIREBASE_CREDENTIALS_JSON" if isinstance(credentials_source, dict) else credentials_source
+                logger.error(
+                    "Firebase credentials could not be loaded from %s: %s. Set "
+                    "FIREBASE_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS.",
+                    where, exc,
+                )
+                raise
             firebase_admin.initialize_app(cred)
         self._db = firestore.client()
 

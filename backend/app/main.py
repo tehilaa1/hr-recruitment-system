@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.dependencies import get_firestore_service
 from app.routers import candidates, jobs, maternity, search, users
 from app.security import require_member
 
@@ -15,6 +16,7 @@ logging.basicConfig(
 )
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="HR Recruitment Management System",
@@ -48,6 +50,25 @@ app.include_router(users.auth_router)
 app.include_router(users.router)
 
 
+_firebase_error: str | None = None
+
+
+@app.on_event("startup")
+def _check_firebase() -> None:
+    """Initialize Firebase at boot so missing credentials show up in the logs immediately."""
+    global _firebase_error
+    try:
+        get_firestore_service()
+        logger.info("Firebase initialized")
+    except Exception as exc:  # keep serving /health so the problem is diagnosable
+        _firebase_error = f"{type(exc).__name__}: {exc}"
+        logger.error("Firebase initialization failed — data endpoints will return 500: %s", exc)
+    logger.info("CORS allowed origins: %s", settings.CORS_ORIGINS)
+
+
 @app.get("/health", tags=["System"])
 def health_check():
-    return {"status": "ok"}
+    return {
+        "status": "ok" if _firebase_error is None else "degraded",
+        "firebase": "ok" if _firebase_error is None else "not configured",
+    }
