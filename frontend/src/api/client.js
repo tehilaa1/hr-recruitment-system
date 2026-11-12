@@ -2,8 +2,21 @@ import axios from 'axios';
 import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
 
-// Backend on Render — fixed URL (not read from env vars).
-const BASE_URL = 'https://hr-backend-3zw8.onrender.com';
+const RENDER_API_URL = 'https://hr-backend-3zw8.onrender.com';
+
+/* Resolve the backend URL (Vite inlines import.meta.env at build time).
+   Production builds never use a localhost value, even if one was set in the
+   hosting provider's env vars — they fall back to the Render backend. */
+function resolveBaseUrl() {
+  const fromEnv = (import.meta.env.VITE_API_BASE_URL || '').trim();
+  const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(fromEnv);
+  if (import.meta.env.PROD && (!fromEnv || isLocal)) return RENDER_API_URL;
+  return (fromEnv || RENDER_API_URL).replace(/\/+$/, '');
+}
+
+export const BASE_URL = resolveBaseUrl();
+// Visible in the browser console — confirms which backend the deployed build uses
+console.info('[api] backend:', BASE_URL);
 
 const http = axios.create({ baseURL: BASE_URL });
 
@@ -65,6 +78,10 @@ export const maternityApi = {
 
 /* Turn a FastAPI error response into a readable message */
 export function apiErrorMessage(err, fallback = 'אירעה שגיאה. נסה שנית.') {
+  // No response at all: server unreachable, still waking up (Render free tier), or blocked by CORS
+  if (err && !err.response && err.code !== 'ERR_CANCELED') {
+    return 'לא ניתן להתחבר לשרת. ייתכן שהשרת מתעורר — נסה שוב בעוד דקה.';
+  }
   const detail = err?.response?.data?.detail;
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail) && detail.length) {
