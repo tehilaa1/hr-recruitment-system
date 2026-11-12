@@ -2,7 +2,13 @@ import axios from 'axios';
 import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// Backend URL is baked in at build time by Vite from VITE_API_BASE_URL
+// (.env for dev, .env.production / host env vars for builds).
+// The fallback is never empty, so requests can't turn into relative URLs on the frontend host.
+const BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD ? 'https://hr-backend-3zw8.onrender.com' : 'http://localhost:8000')
+).replace(/\/+$/, '');
 
 const http = axios.create({ baseURL: BASE_URL });
 
