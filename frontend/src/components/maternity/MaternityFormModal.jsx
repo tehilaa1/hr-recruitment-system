@@ -1,10 +1,13 @@
 import { useState } from 'react';
+import { Wand2 } from 'lucide-react';
 import { apiErrorMessage, maternityApi } from '../../api/client';
 import {
   MATERNITY_COLUMNS,
   emptyMaternityRecord,
+  formatIsoDate,
   toMaternityPayload,
 } from '../../constants/maternityColumns';
+import { expectedReturnDate } from '../../utils/dates';
 import Modal, { inputClass, primaryButtonClass, secondaryButtonClass } from '../Modal';
 
 function FieldInput({ field, value, onChange, autoFocus }) {
@@ -61,6 +64,27 @@ function FieldInput({ field, value, onChange, autoFocus }) {
         />
       );
   }
+}
+
+/* Fills expected_return_date with birth_date + 15 weeks; the date input stays editable */
+function AutoReturnDate({ birthDate, value, onFill }) {
+  const computed = expectedReturnDate(birthDate);
+  const applied = Boolean(computed) && value === computed;
+  return (
+    <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+      <button
+        type="button"
+        onClick={() => onFill(computed)}
+        disabled={!computed}
+        title={computed ? `ימולא ${formatIsoDate(computed)} — ניתן לשנות ידנית` : 'יש להזין קודם תאריך לידה'}
+        className="flex items-center gap-1 text-xs font-medium text-pink-600 hover:text-pink-700 hover:underline disabled:text-gray-300 disabled:no-underline disabled:cursor-not-allowed"
+      >
+        <Wand2 className="h-3.5 w-3.5" />
+        חשב אוטומטית (15 שבועות מתאריך הלידה)
+      </button>
+      {applied && <span className="text-[11px] text-emerald-600">✓ חושב לפי תאריך הלידה</span>}
+    </div>
+  );
 }
 
 function Label({ field }) {
@@ -147,6 +171,13 @@ export default function MaternityFormModal({ record, onClose, onSaved }) {
                 onChange={(v) => set(col.key, v)}
                 autoFocus={i === 0}
               />
+              {col.key === 'expected_return_date' && (
+                <AutoReturnDate
+                  birthDate={form.birth_date}
+                  value={form.expected_return_date}
+                  onFill={(v) => set('expected_return_date', v)}
+                />
+              )}
             </div>
           )
         )}

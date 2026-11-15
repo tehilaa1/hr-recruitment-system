@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { CalendarPlus, CheckCircle2, Circle, Mail, Trash2, UserX } from 'lucide-react';
+import { CalendarPlus, Mail, Trash2, UserX } from 'lucide-react';
+import CompleteToggle from './CompleteToggle';
 import StatusSelect from './StatusSelect';
 import {
   buildInterviewInviteUrl,
@@ -42,36 +43,6 @@ function OutlookAction({ candidate, job }) {
   }
 
   return null;
-}
-
-/* "סיום טיפול" toggle — marks that the recruiter is done with this candidate */
-function CompleteToggle({ completed, disabled, onToggle }) {
-  return completed ? (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={disabled}
-      title="החזרה לטיפול"
-      aria-pressed="true"
-      className="group/done flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-white hover:text-gray-600 hover:border-gray-200 transition-colors disabled:opacity-50 disabled:cursor-wait"
-    >
-      <CheckCircle2 className="h-3.5 w-3.5" />
-      <span className="group-hover/done:hidden">טופל</span>
-      <span className="hidden group-hover/done:inline">החזרה לטיפול</span>
-    </button>
-  ) : (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={disabled}
-      title="סמן שהטיפול במועמד הסתיים"
-      aria-pressed="false"
-      className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium border border-gray-200 text-gray-500 hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50 transition-colors disabled:opacity-50 disabled:cursor-wait"
-    >
-      <Circle className="h-3.5 w-3.5" />
-      סיום טיפול
-    </button>
-  );
 }
 
 const COLUMNS = [
@@ -248,6 +219,7 @@ export default function CandidatesTable({ candidates, job, onStatusChange, onTog
               <td className="keep-color px-4 py-3 whitespace-nowrap">
                 <CompleteToggle
                   completed={!!c.is_completed}
+                  title="סמן שהטיפול במועמד הסתיים"
                   disabled={completingIds.has(c.id)}
                   onToggle={() => handleToggleComplete(c)}
                 />

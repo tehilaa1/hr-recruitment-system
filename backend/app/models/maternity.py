@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field, field_validator
 # Adding a column:
 #   1. add the field to MaternityLeaveBase *and* MaternityLeaveUpdate below
 #   2. add one entry to MATERNITY_COLUMNS in frontend/src/constants/maternityColumns.js
+#      (or to MATERNITY_STATUS_FIELDS for a row-level flag that has its own
+#      action button and is not part of the add/edit form, like is_completed)
 # Existing Firestore documents without the new field simply get its default.
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -25,6 +27,8 @@ class MaternityLeaveBase(BaseModel):
     delivery_contact_phone: str = ""
     attendance_updated: bool = False
     notes: str = ""
+    # "סיום טיפול - יולדת חזרה": the employee is back; the record is kept but closed
+    is_completed: bool = False
 
 
 class MaternityLeaveCreate(MaternityLeaveBase):
@@ -44,6 +48,7 @@ class MaternityLeaveUpdate(BaseModel):
     delivery_contact_phone: Optional[str] = None
     attendance_updated: Optional[bool] = None
     notes: Optional[str] = None
+    is_completed: Optional[bool] = None
 
 
 class MaternityLeaveResponse(MaternityLeaveBase):

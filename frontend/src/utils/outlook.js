@@ -8,6 +8,9 @@
  * Personal Outlook.com accounts use https://outlook.live.com instead. Set
  * VITE_OUTLOOK_BASE_URL in frontend/.env to switch.
  */
+import { formatIsoDate } from '../constants/maternityColumns';
+import { returnFollowupDate } from './dates';
+
 const OUTLOOK_BASE_URL =
   import.meta.env.VITE_OUTLOOK_BASE_URL || 'https://outlook.office.com';
 
@@ -70,6 +73,36 @@ export function buildInterviewInviteUrl(candidate, job) {
     to: uniqueAttendees.join(','),
     location,
     body: bodyLines.join('\n'),
+  });
+  return `${OUTLOOK_BASE_URL}/calendar/0/deeplink/compose?${query}`;
+}
+
+/*
+ * Calendar reminder to call an employee on maternity leave about her return.
+ * Scheduled 13 weeks after the birth (moved back to Thursday if that is a
+ * Friday/Saturday), 10:00–10:30 in the user's own Outlook time zone.
+ * Returns '' when the record has no birth date.
+ */
+export function buildMaternityReminderUrl(record) {
+  const date = returnFollowupDate(record?.birth_date);
+  if (!date) return '';
+  const name = record.name?.trim() || '';
+
+  const body = [
+    'תזכורת: ליצור קשר עם העובדת כדי לבדוק את מועד החזרה מחופשת הלידה.',
+    '',
+    `שם: ${name || '—'}`,
+    `טלפון: ${record.phone?.trim() || '—'}`,
+    `תאריך לידה: ${formatIsoDate(record.birth_date) || '—'}`,
+    `תאריך חזרה משוער: ${formatIsoDate(record.expected_return_date) || '—'}`,
+  ].join('\n');
+
+  const query = buildQuery({
+    subject: `יצירת קשר עם יולדת לבדיקת מועד חזרה${name ? ` - ${name}` : ''}`,
+    body,
+    // No time-zone suffix: Outlook reads these as the user's local time
+    startdt: `${date}T10:00:00`,
+    enddt: `${date}T10:30:00`,
   });
   return `${OUTLOOK_BASE_URL}/calendar/0/deeplink/compose?${query}`;
 }

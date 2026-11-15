@@ -32,7 +32,16 @@ export const MATERNITY_COLUMNS = [
   { key: 'notes', label: 'הערות', type: 'textarea', wide: true, placeholder: 'הערות חופשיות...', tableWidth: 'min-w-[160px]' },
 ];
 
-/* Flat list of the actual data fields (groups expanded) */
+/*
+ * Row-level status flags. They are stored with the record (and synced with the
+ * backend model) but are not form fields or data columns: each has its own
+ * action button in the table, and the add/edit form never sends them.
+ */
+export const MATERNITY_STATUS_FIELDS = [
+  { key: 'is_completed', label: 'סיום טיפול - יולדת חזרה', type: 'status' },
+];
+
+/* Flat list of the form/table data fields (groups expanded) */
 export const MATERNITY_FIELDS = MATERNITY_COLUMNS.flatMap((c) =>
   c.type === 'group' ? c.fields : [c]
 );

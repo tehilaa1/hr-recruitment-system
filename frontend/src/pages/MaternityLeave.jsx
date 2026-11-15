@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Baby,
   CalendarClock,
+  CalendarPlus,
   ClipboardX,
   Loader2,
   Pencil,
@@ -13,11 +14,14 @@ import {
   Trash2,
 } from 'lucide-react';
 import { maternityApi } from '../api/client';
+import CompleteToggle from '../components/CompleteToggle';
 import Navbar from '../components/Navbar';
 import MaternityActionsModal from '../components/maternity/MaternityActionsModal';
 import MaternityFormModal from '../components/maternity/MaternityFormModal';
 import MaternitySettingsModal from '../components/maternity/MaternitySettingsModal';
 import { MATERNITY_COLUMNS, formatIsoDate } from '../constants/maternityColumns';
+import { returnFollowupDate } from '../utils/dates';
+import { buildMaternityReminderUrl, openInNewTab } from '../utils/outlook';
 
 const RETURN_SOON_DAYS = 30;
 
@@ -29,6 +33,34 @@ const addDaysIso = (days) => {
 };
 
 const Empty = () => <span className="text-gray-300">—</span>;
+
+/* Active records first; completed ("יולדת חזרה") ones sink to the bottom, order otherwise kept */
+const activeFirst = (list) =>
+  list
+    .map((r, i) => [r, i])
+    .sort(([a, ai], [b, bi]) => Number(!!a.is_completed) - Number(!!b.is_completed) || ai - bi)
+    .map(([r]) => r);
+
+/* Opens a pre-filled Outlook event 13 weeks after the birth (weekends -> Thursday) */
+function ReminderButton({ record }) {
+  const date = returnFollowupDate(record.birth_date);
+  return (
+    <button
+      type="button"
+      disabled={!date}
+      onClick={() => openInNewTab(buildMaternityReminderUrl(record))}
+      title={
+        date
+          ? `תזכורת ביומן Outlook ל-${formatIsoDate(date)} (13 שבועות מהלידה) – יצירת קשר לבדיקת מועד החזרה`
+          : 'יש להזין תאריך לידה כדי ליצור תזכורת'
+      }
+      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-violet-200 text-violet-600 hover:bg-violet-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+    >
+      <CalendarPlus className="h-3.5 w-3.5" />
+      תזכורת ב-Outlook
+    </button>
+  );
+}
 
 function StatCard({ title, value, icon: Icon, colorClass }) {
   return (
@@ -153,14 +185,16 @@ export default function MaternityLeave() {
   /* Optimistic yes/no toggle with rollback */
   const handleToggle = async (record, key) => {
     const previous = Boolean(record[key]);
-    const setValue = (v) =>
-      setRecords((prev) => prev.map((r) => (r.id === record.id ? { ...r, [key]: v } : r)));
-    setValue(!previous);
+    const next = !previous;
+    setRecords((prev) => prev.map((r) => (r.id === record.id ? { ...r, [key]: next } : r)));
     setTogglingId(record.id);
     try {
-      await maternityApi.update(record.id, { [key]: !previous });
+      await maternityApi.update(record.id, { [key]: next });
     } catch {
-      setValue(previous);
+      // Only roll back if nothing newer has replaced our optimistic value meanwhile
+      setRecords((prev) =>
+        prev.map((r) => (r.id === record.id && Boolean(r[key]) === next ? { ...r, [key]: previous } : r))
+      );
       alert('שגיאה בעדכון – הערך הוחזר');
     } finally {
       setTogglingId(null);
@@ -169,19 +203,26 @@ export default function MaternityLeave() {
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return records;
-    return records.filter((r) =>
-      [r.name, r.phone, r.company_email, r.notes].some((v) => String(v || '').toLowerCase().includes(q))
-    );
+    const matching = q
+      ? records.filter((r) =>
+          [r.name, r.phone, r.company_email, r.notes].some((v) => String(v || '').toLowerCase().includes(q))
+        )
+      : records;
+    return activeFirst(matching);
   }, [records, filter]);
 
+  const completedCount = useMemo(() => filtered.filter((r) => r.is_completed).length, [filtered]);
+
+  /* Stats count only open records: employees who already returned are done */
   const stats = useMemo(() => {
     const today = todayIso();
     const soon = addDaysIso(RETURN_SOON_DAYS);
+    const active = records.filter((r) => !r.is_completed);
     return {
-      total: records.length,
-      notUpdated: records.filter((r) => !r.attendance_updated).length,
-      returningSoon: records.filter(
+      total: active.length,
+      returned: records.length - active.length,
+      notUpdated: active.filter((r) => !r.attendance_updated).length,
+      returningSoon: active.filter(
         (r) => r.expected_return_date && r.expected_return_date >= today && r.expected_return_date <= soon
       ).length,
     };
@@ -238,6 +279,9 @@ export default function MaternityLeave() {
           <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-gray-100">
             <h2 className="text-base font-bold text-gray-900">
               רשומות {records.length > 0 && <span className="text-gray-400 font-normal">({filtered.length})</span>}
+              {stats.returned > 0 && (
+                <span className="mr-2 text-xs font-normal text-emerald-600">· {stats.returned} חזרו לעבודה</span>
+              )}
             </h2>
             <div className="relative w-full max-w-xs">
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -290,14 +334,29 @@ export default function MaternityLeave() {
                         {col.label}
                       </th>
                     ))}
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 whitespace-nowrap min-w-[170px]">
+                      סיום טיפול
+                    </th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 whitespace-nowrap">
                       פעולות
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filtered.map((r) => (
-                    <tr key={r.id} className="hover:bg-pink-50/30 transition-colors group">
+                  {filtered.map((r, idx) => (
+                    <tr
+                      key={r.id}
+                      className={`transition-colors group ${
+                        r.is_completed
+                          ? 'bg-gray-50/80 [&>td:not(.keep-color)]:opacity-60 hover:bg-gray-100/70'
+                          : 'hover:bg-pink-50/30'
+                      } ${
+                        // Divider between open records and employees who already returned
+                        r.is_completed && idx === filtered.length - completedCount && idx > 0
+                          ? 'border-t-2 border-t-gray-200'
+                          : ''
+                      }`}
+                    >
                       {MATERNITY_COLUMNS.map((col) => (
                         <td
                           key={col.key}
@@ -308,8 +367,20 @@ export default function MaternityLeave() {
                           <Cell col={col} record={r} onToggle={handleToggle} toggling={togglingId === r.id} />
                         </td>
                       ))}
+                      <td className="keep-color px-4 py-3 whitespace-nowrap">
+                        <CompleteToggle
+                          completed={!!r.is_completed}
+                          disabled={togglingId === r.id}
+                          onToggle={() => handleToggle(r, 'is_completed')}
+                          label="סיום טיפול - יולדת חזרה"
+                          doneLabel="חזרה לעבודה"
+                          reopenLabel="פתיחה מחדש"
+                          title="סמן שהעובדת חזרה לעבודה והטיפול הסתיים"
+                        />
+                      </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-1">
+                          <ReminderButton record={r} />
                           <button
                             onClick={() => setActionsRecord(r)}
                             className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-pink-600 hover:bg-pink-700 text-white transition-colors"
