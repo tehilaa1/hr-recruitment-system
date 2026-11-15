@@ -26,6 +26,7 @@ export default function Navbar() {
               <NavLink
                 key={key}
                 to={path}
+                title={title}
                 className={({ isActive }) =>
                   `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                     isActive || pathname.startsWith(`${path}/`)
@@ -34,8 +35,9 @@ export default function Navbar() {
                   }`
                 }
               >
-                <Icon className="h-4 w-4" />
-                {title}
+                <Icon className="h-4 w-4 flex-shrink-0" />
+                {/* Four modules don't fit as text next to the search box on mid-size screens */}
+                <span className="hidden xl:inline whitespace-nowrap">{title}</span>
               </NavLink>
             ))}
           </div>

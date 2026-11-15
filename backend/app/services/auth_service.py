@@ -47,6 +47,14 @@ def get_or_create_account(
     return user.uid, True
 
 
+def set_password(uid: str, password: str) -> None:
+    """Change an account's password (Admin SDK). ValueError if Firebase rejects it."""
+    try:
+        auth.update_user(uid, password=password)
+    except auth.UserNotFoundError as exc:
+        raise ValueError("החשבון לא נמצא") from exc
+
+
 def delete_account(uid: str) -> None:
     try:
         auth.delete_user(uid)

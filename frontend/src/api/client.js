@@ -42,6 +42,21 @@ http.interceptors.response.use(
 
 export const authApi = {
   me: () => http.get('/api/auth/me'),
+  /* Password reset with an SMS code (public — works signed out) */
+  requestResetCode: (email) => http.post('/api/auth/password-reset/request', { email }),
+  verifyResetCode: (email, code) => http.post('/api/auth/password-reset/verify', { email, code }),
+  confirmReset: (data) => http.post('/api/auth/password-reset/confirm', data),
+};
+
+export const budgetsApi = {
+  list: () => http.get('/api/budgets'),
+  get: (year) => http.get(`/api/budgets/${year}`),
+  create: (data) => http.post('/api/budgets', data),
+  update: (year, data) => http.patch(`/api/budgets/${year}`, data),
+  remove: (year) => http.delete(`/api/budgets/${year}`),
+  createEvent: (year, data) => http.post(`/api/budgets/${year}/events`, data),
+  updateEvent: (year, id, data) => http.patch(`/api/budgets/${year}/events/${id}`, data),
+  removeEvent: (year, id) => http.delete(`/api/budgets/${year}/events/${id}`),
 };
 
 export const usersApi = {

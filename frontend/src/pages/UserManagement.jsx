@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { KeyRound, Loader2, RefreshCw, ShieldCheck, Trash2, UserPlus } from 'lucide-react';
+import { AlertTriangle, Check, KeyRound, Loader2, Pencil, RefreshCw, ShieldCheck, Smartphone, Trash2, UserPlus, X } from 'lucide-react';
 import { apiErrorMessage, usersApi } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import Navbar from '../components/Navbar';
@@ -12,9 +12,74 @@ const inputClass =
 const formatDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString('he-IL', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
 
+/* "+972501234567" -> "050-123-4567" for display (other countries stay E.164) */
+const formatPhone = (e164) => {
+  if (!e164) return '';
+  if (e164.startsWith('+972')) {
+    const local = `0${e164.slice(4)}`;
+    return local.length === 10 ? `${local.slice(0, 3)}-${local.slice(3, 6)}-${local.slice(6)}` : local;
+  }
+  return e164;
+};
+
+/* Inline edit of the SMS phone number (used for password-reset codes) */
+function PhoneCell({ user, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const start = () => { setValue(formatPhone(user.phone)); setEditing(true); };
+  const save = async () => {
+    setSaving(true);
+    const ok = await onSave(user, value.trim());
+    setSaving(false);
+    if (ok) setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <input
+          type="tel"
+          dir="ltr"
+          autoFocus
+          value={value}
+          placeholder="050-0000000"
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          className={`${inputClass} py-1.5 w-36`}
+          aria-label={`טלפון של ${user.email}`}
+        />
+        <button onClick={save} disabled={saving} className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50" title="שמירה">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+        </button>
+        <button onClick={() => setEditing(false)} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100" title="ביטול">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <button onClick={start} className="group flex items-center gap-1.5 text-right" title="עריכת מספר הטלפון לקודי SMS">
+      {user.phone ? (
+        <span dir="ltr" className="font-mono text-xs text-gray-700">{formatPhone(user.phone)}</span>
+      ) : (
+        <span className="flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+          <AlertTriangle className="h-3 w-3" />
+          אין טלפון – לא ניתן לאפס ב-SMS
+        </span>
+      )}
+      <Pencil className="h-3 w-3 text-gray-300 group-hover:text-gray-600" />
+    </button>
+  );
+}
+
 function AddUserForm({ onAdded }) {
   const { resetPassword } = useAuth();
-  const [form, setForm] = useState({ email: '', display_name: '', role: 'editor' });
+  const [form, setForm] = useState({ email: '', display_name: '', phone: '', role: 'editor' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -43,7 +108,7 @@ function AddUserForm({ onAdded }) {
         message = `${data.user.email} נוסף/ה (חשבון קיים – ניתן להתחבר עם הסיסמה הקיימת).`;
       }
       onAdded(data.user, message);
-      setForm({ email: '', display_name: '', role: 'editor' });
+      setForm({ email: '', display_name: '', phone: '', role: 'editor' });
     } catch (err) {
       setError(apiErrorMessage(err, 'שגיאה בהוספת המשתמש'));
     } finally {
@@ -57,7 +122,7 @@ function AddUserForm({ onAdded }) {
         <UserPlus className="h-4 w-4 text-indigo-500" />
         הוספת משתמש מורשה
       </h2>
-      <div className="grid grid-cols-1 md:grid-cols-[2fr_1.5fr_1fr_auto] gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-[2fr_1.5fr_1.3fr_1fr_auto] gap-3">
         <input
           type="email"
           dir="ltr"
@@ -73,6 +138,15 @@ function AddUserForm({ onAdded }) {
           onChange={(e) => set('display_name', e.target.value)}
           className={inputClass}
           aria-label="שם"
+        />
+        <input
+          type="tel"
+          dir="ltr"
+          placeholder="נייד ל-SMS: 050-0000000"
+          value={form.phone}
+          onChange={(e) => set('phone', e.target.value)}
+          className={inputClass}
+          aria-label="טלפון נייד לקודי אימות"
         />
         <select
           value={form.role}
@@ -137,6 +211,19 @@ export default function UserManagement() {
       flash('error', apiErrorMessage(err, 'שגיאה בעדכון התפקיד'));
     } finally {
       setBusyEmail(null);
+    }
+  };
+
+  /* Returns true on success so the inline editor can close */
+  const handlePhoneSave = async (user, phone) => {
+    try {
+      const { data } = await usersApi.update(user.email, { phone });
+      setUsers((prev) => prev.map((u) => (u.email === user.email ? data : u)));
+      flash('ok', phone ? `מספר הטלפון של ${user.email} עודכן` : `מספר הטלפון של ${user.email} הוסר`);
+      return true;
+    } catch (err) {
+      flash('error', apiErrorMessage(err, 'שגיאה בעדכון הטלפון'));
+      return false;
     }
   };
 
@@ -218,6 +305,9 @@ export default function UserManagement() {
                   <tr className="bg-gray-50/80 border-b border-gray-200 text-xs text-gray-500">
                     <th className="px-4 py-3 text-right font-semibold">משתמש</th>
                     <th className="px-4 py-3 text-right font-semibold">תפקיד</th>
+                    <th className="px-4 py-3 text-right font-semibold">
+                      <span className="flex items-center gap-1"><Smartphone className="h-3.5 w-3.5" />נייד (SMS)</span>
+                    </th>
                     <th className="px-4 py-3 text-right font-semibold">נוסף</th>
                     <th className="px-4 py-3 text-right font-semibold">פעולות</th>
                   </tr>
@@ -258,6 +348,9 @@ export default function UserManagement() {
                             </select>
                           )}
                         </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <PhoneCell user={u} onSave={handlePhoneSave} />
+                        </td>
                         <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
                           {formatDate(u.created_at)}
                           {u.created_by && <p className="text-xs text-gray-400">ע״י {u.created_by}</p>}
@@ -267,10 +360,10 @@ export default function UserManagement() {
                             <button
                               onClick={() => handleSendReset(u)}
                               className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-gray-600 hover:bg-gray-100"
-                              title="שליחת מייל לאיפוס / הגדרת סיסמה"
+                              title="שליחת מייל עם קישור להגדרת סיסמה (למשתמשים חדשים או ללא טלפון)"
                             >
                               <KeyRound className="h-3.5 w-3.5" />
-                              שליחת איפוס סיסמה
+                              מייל להגדרת סיסמה
                             </button>
                             {!isSelf && (
                               <button

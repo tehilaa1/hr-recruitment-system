@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.dependencies import get_firestore_service
-from app.routers import candidates, jobs, maternity, search, talent_pool, users
+from app.routers import budgets, candidates, jobs, maternity, search, talent_pool, users
 from app.security import require_member
 
 logging.basicConfig(
@@ -37,7 +37,7 @@ app.add_middleware(
 )
 
 # All data routers require an authenticated, authorized user (see app/security.py).
-# Only /health is public.
+# Public: /health and the SMS password-reset endpoints under /api/auth/password-reset.
 _members_only = [Depends(require_member)]
 
 app.include_router(jobs.router, dependencies=_members_only)
@@ -45,8 +45,10 @@ app.include_router(candidates.router, dependencies=_members_only)
 app.include_router(search.router, dependencies=_members_only)
 app.include_router(maternity.router, dependencies=_members_only)
 app.include_router(talent_pool.router, dependencies=_members_only)
+app.include_router(budgets.router, dependencies=_members_only)
 
-# Auth/users routers enforce their own rules (any member for /me, admin for /api/users)
+# Auth/users routers enforce their own rules (public password reset,
+# any member for /me, admin for /api/users)
 app.include_router(users.auth_router)
 app.include_router(users.router)
 
@@ -65,6 +67,10 @@ def _check_firebase() -> None:
         _firebase_error = f"{type(exc).__name__}: {exc}"
         logger.error("Firebase initialization failed — data endpoints will return 500: %s", exc)
     logger.info("CORS allowed origins: %s", settings.CORS_ORIGINS)
+    if settings.SMS_PROVIDER == "console":
+        logger.warning("SMS is in simulation mode (SMS_PROVIDER=console): codes are only logged")
+    if settings.SMS_DEV_MODE:
+        logger.warning("SMS_DEV_MODE is ON — verification codes are returned to the browser. Never use in production!")
 
 
 @app.get("/health", tags=["System"])

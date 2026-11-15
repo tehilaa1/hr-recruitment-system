@@ -22,3 +22,13 @@ services:
       # (localhost:5173 is always allowed for local development)
       - key: CORS_ORIGINS
         sync: false
+      # SMS codes for password reset. "console" only logs the code (no real SMS);
+      # switch to "twilio" and fill the TWILIO_* values to send real messages.
+      - key: SMS_PROVIDER
+        value: console
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false

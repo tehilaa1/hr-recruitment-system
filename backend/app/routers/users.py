@@ -8,8 +8,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
 
-from app.dependencies import get_firestore_service
+from app.dependencies import get_firestore_service, get_password_reset_service
 from app.models.user import (
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    PasswordResetRequestResult,
+    PasswordResetVerify,
+    PasswordResetVerifyResult,
     UserCreate,
     UserCreateResult,
     UserResponse,
@@ -19,10 +24,18 @@ from app.models.user import (
 from app.security import AdminUser, AuthUser
 from app.services import auth_service
 from app.services.firestore_service import FirestoreService
+from app.services.password_reset_service import (
+    GENERIC_REQUEST_MESSAGE,
+    RESEND_COOLDOWN,
+    TOKEN_TTL,
+    PasswordResetService,
+    ResetError,
+)
 
 logger = logging.getLogger(__name__)
 
 DB = Annotated[FirestoreService, Depends(get_firestore_service)]
+Resets = Annotated[PasswordResetService, Depends(get_password_reset_service)]
 
 # /api/auth/me – any authorized user
 auth_router = APIRouter(prefix="/api/auth", tags=["Auth"])
@@ -34,6 +47,54 @@ router = APIRouter(prefix="/api/users", tags=["User Management"])
 @auth_router.get("/me", response_model=UserResponse)
 async def get_me(user: AuthUser, db: DB):
     return await asyncio.to_thread(db.get_user, user.email)
+
+
+# ------------------------------------------------------------------ #
+# Password reset with SMS code — public (the user is signed out)       #
+# ------------------------------------------------------------------ #
+
+
+@auth_router.post(
+    "/password-reset/request",
+    response_model=PasswordResetRequestResult,
+    status_code=http_status.HTTP_202_ACCEPTED,
+)
+async def request_password_reset(payload: PasswordResetRequest, resets: Resets):
+    """Text a verification code to the account's phone. Same answer for unknown accounts."""
+    try:
+        outcome = await asyncio.to_thread(resets.request, payload.email)
+    except ResetError as exc:
+        raise HTTPException(exc.status_code, exc.message)
+    return PasswordResetRequestResult(
+        message=GENERIC_REQUEST_MESSAGE,
+        resend_after=int(RESEND_COOLDOWN.total_seconds()),
+        dev_code=outcome.dev_code,
+    )
+
+
+@auth_router.post("/password-reset/verify", response_model=PasswordResetVerifyResult)
+async def verify_password_reset(payload: PasswordResetVerify, resets: Resets):
+    try:
+        token = await asyncio.to_thread(resets.verify, payload.email, payload.code)
+    except ResetError as exc:
+        raise HTTPException(exc.status_code, exc.message)
+    return PasswordResetVerifyResult(reset_token=token, expires_in=int(TOKEN_TTL.total_seconds()))
+
+
+@auth_router.post("/password-reset/confirm", status_code=http_status.HTTP_204_NO_CONTENT)
+async def confirm_password_reset(payload: PasswordResetConfirm, resets: Resets):
+    """new_password and confirm_password must match and pass the strength rules (422 otherwise)."""
+    try:
+        await asyncio.to_thread(
+            resets.confirm, payload.email, payload.reset_token, payload.new_password
+        )
+    except ResetError as exc:
+        raise HTTPException(exc.status_code, exc.message)
+
+
+# ------------------------------------------------------------------ #
+# User management — admins only                                       #
+# ------------------------------------------------------------------ #
 
 
 @router.get("", response_model=list[UserResponse])
@@ -53,6 +114,7 @@ async def create_user(payload: UserCreate, admin: AdminUser, db: DB):
     data = {
         "display_name": payload.display_name.strip(),
         "role": payload.role,
+        "phone": payload.phone,
         "uid": uid,
         "created_at": datetime.now(timezone.utc),
         "created_by": admin.email,

@@ -174,6 +174,79 @@ class FirestoreService:
         return True
 
     # ------------------------------------------------------------------ #
+    # Annual budgets: annual_budgets/{year} + events subcollection         #
+    # ------------------------------------------------------------------ #
+
+    _BUDGETS = "annual_budgets"
+
+    def _budget_ref(self, year: int):
+        return self._db.collection(self._BUDGETS).document(str(year))
+
+    def list_budget_years(self) -> list[dict]:
+        return [
+            {**d.to_dict(), "year": int(d.id)}
+            for d in self._db.collection(self._BUDGETS).stream()
+            if d.id.isdigit()
+        ]
+
+    def get_budget_year(self, year: int) -> Optional[dict]:
+        doc = self._budget_ref(year).get()
+        return {**doc.to_dict(), "year": year} if doc.exists else None
+
+    def create_budget_year(self, year: int, data: dict) -> Optional[dict]:
+        """None if the year already exists (create() fails atomically, no overwrite)."""
+        from google.api_core.exceptions import AlreadyExists
+
+        now = datetime.now(timezone.utc)
+        data = {**data, "created_at": now, "updated_at": now}
+        data.pop("year", None)
+        try:
+            self._budget_ref(year).create(data)
+        except AlreadyExists:
+            return None
+        return {**data, "year": year}
+
+    def update_budget_year(self, year: int, data: dict) -> Optional[dict]:
+        ref = self._budget_ref(year)
+        if not ref.get().exists:
+            return None
+        ref.update({**data, "updated_at": datetime.now(timezone.utc)})
+        return {**ref.get().to_dict(), "year": year}
+
+    def delete_budget_year(self, year: int) -> bool:
+        ref = self._budget_ref(year)
+        if not ref.get().exists:
+            return False
+        for event in ref.collection("events").stream():
+            event.reference.delete()
+        ref.delete()
+        return True
+
+    def list_budget_events(self, year: int) -> list[dict]:
+        return [{"id": d.id, **d.to_dict()} for d in self._budget_ref(year).collection("events").stream()]
+
+    def create_budget_event(self, year: int, data: dict) -> dict:
+        now = datetime.now(timezone.utc)
+        data = {**data, "created_at": now, "updated_at": now}
+        ref = self._budget_ref(year).collection("events").document()
+        ref.set(data)
+        return {"id": ref.id, **data}
+
+    def update_budget_event(self, year: int, event_id: str, data: dict) -> Optional[dict]:
+        ref = self._budget_ref(year).collection("events").document(event_id)
+        if not ref.get().exists:
+            return None
+        ref.update({**data, "updated_at": datetime.now(timezone.utc)})
+        return {"id": event_id, **ref.get().to_dict()}
+
+    def delete_budget_event(self, year: int, event_id: str) -> bool:
+        ref = self._budget_ref(year).collection("events").document(event_id)
+        if not ref.get().exists:
+            return False
+        ref.delete()
+        return True
+
+    # ------------------------------------------------------------------ #
     # Maternity leaves                                                     #
     # ------------------------------------------------------------------ #
 
@@ -238,6 +311,17 @@ class FirestoreService:
             return False
         ref.delete()
         return True
+
+    # Password reset state (OTP / token hashes); document id = lower-cased email
+    def get_password_reset(self, email: str) -> Optional[dict]:
+        doc = self._db.collection("password_resets").document(email).get()
+        return doc.to_dict() if doc.exists else None
+
+    def set_password_reset(self, email: str, data: dict) -> None:
+        self._db.collection("password_resets").document(email).set(data)
+
+    def delete_password_reset(self, email: str) -> None:
+        self._db.collection("password_resets").document(email).delete()
 
     def count_admins(self) -> int:
         docs = (

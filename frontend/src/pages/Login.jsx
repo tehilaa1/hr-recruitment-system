@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AlertTriangle, Briefcase, Loader2, LogIn } from 'lucide-react';
 import { firebaseErrorMessage, useAuth } from '../auth/AuthContext';
 import { isFirebaseConfigured } from '../firebase';
@@ -8,13 +8,13 @@ const inputClass =
   'w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition';
 
 export default function Login() {
-  const { profile, loading, authError, login, resetPassword } = useAuth();
+  const { profile, loading, authError, login } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [info, setInfo] = useState('');
 
   // Already signed in and authorized → go where the user was heading
   if (profile) {
@@ -25,7 +25,6 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    setInfo('');
     if (!email.trim() || !password) {
       setError('יש להזין מייל וסיסמה');
       return;
@@ -41,20 +40,9 @@ export default function Login() {
     }
   };
 
-  const handleReset = async () => {
-    setError('');
-    setInfo('');
-    if (!email.trim()) {
-      setError('הזינו את כתובת המייל ואז לחצו על "שכחתי סיסמה"');
-      return;
-    }
-    try {
-      await resetPassword(email);
-    } catch {
-      // Don't reveal whether the account exists
-    }
-    setInfo('אם קיים חשבון עם כתובת זו, נשלח אליה מייל לאיפוס סיסמה.');
-  };
+  // SMS-verified reset flow; carries over the email typed here
+  const handleReset = () =>
+    navigate(email.trim() ? `/reset-password?email=${encodeURIComponent(email.trim())}` : '/reset-password');
 
   const busy = submitting || loading;
   const shownError = error || authError;
@@ -118,11 +106,6 @@ export default function Login() {
               {shownError && (
                 <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                   {shownError}
-                </p>
-              )}
-              {info && (
-                <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                  {info}
                 </p>
               )}
 

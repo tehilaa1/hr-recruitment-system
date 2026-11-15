@@ -1,4 +1,4 @@
-import { Baby, Briefcase, Library } from 'lucide-react';
+import { Baby, Briefcase, Library, Wallet } from 'lucide-react';
 
 /*
  * Top-level HR modules. Drives both the home page cards and the navbar tabs,
@@ -42,6 +42,19 @@ export const HR_MODULES = [
       icon: 'bg-pink-100 text-pink-600',
       ring: 'hover:border-pink-300 hover:shadow-pink-100',
       cta: 'text-pink-600',
+    },
+  },
+  {
+    key: 'budgets',
+    path: '/budgets',
+    title: 'ניהול תקציב שנתי',
+    description:
+      'תקציב שנתי לפי שנים, וחלוקתו לחגים ולאירועים: תקציב מוקצה מול ביצוע בפועל, סטיות, סטטוס ויתרה פנויה.',
+    icon: Wallet,
+    accent: {
+      icon: 'bg-amber-100 text-amber-600',
+      ring: 'hover:border-amber-300 hover:shadow-amber-100',
+      cta: 'text-amber-600',
     },
   },
 ];

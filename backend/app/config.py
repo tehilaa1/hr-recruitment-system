@@ -4,7 +4,7 @@ import base64
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, List, Optional, Union
+from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -41,6 +41,16 @@ class Settings(BaseSettings):
 
     # How many CVs are parsed in parallel per process (keeps batches under rate limits).
     GEMINI_MAX_CONCURRENCY: int = 4
+
+    # --- SMS verification codes (password reset) ---
+    # "console": simulation — codes are only written to the server log.
+    # "twilio":  real SMS via Twilio (needs the three TWILIO_* values).
+    SMS_PROVIDER: Literal["console", "twilio"] = "console"
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_FROM_NUMBER: Optional[str] = None  # E.164 number or Messaging Service SID ("MG…")
+    # Testing only: the API also returns the code to the browser. NEVER enable in production.
+    SMS_DEV_MODE: bool = False
 
     # Accepts a JSON list or a comma-separated string, e.g.
     # CORS_ORIGINS=https://my-frontend.onrender.com,https://hr.example.com

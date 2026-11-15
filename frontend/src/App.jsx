@@ -5,7 +5,9 @@ import Home from './pages/Home';
 import JobDetails from './pages/JobDetails';
 import JobsDashboard from './pages/JobsDashboard';
 import Login from './pages/Login';
+import AnnualBudget from './pages/AnnualBudget';
 import MaternityLeave from './pages/MaternityLeave';
+import ResetPassword from './pages/ResetPassword';
 import TalentPool from './pages/TalentPool';
 import UserManagement from './pages/UserManagement';
 
@@ -15,6 +17,8 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          {/* Public: SMS-verified password reset (also used signed-in to change the password) */}
+          <Route path="/reset-password" element={<ResetPassword />} />
 
           {/* Any authorized user */}
           <Route element={<RequireAuth />}>
@@ -23,6 +27,7 @@ export default function App() {
             <Route path="/jobs/:jobId" element={<JobDetails />} />
             <Route path="/talent-pool" element={<TalentPool />} />
             <Route path="/maternity" element={<MaternityLeave />} />
+            <Route path="/budgets" element={<AnnualBudget />} />
           </Route>
 
           {/* Admins only */}
