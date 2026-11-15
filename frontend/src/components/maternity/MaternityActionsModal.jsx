@@ -1,8 +1,19 @@
 import { useState } from 'react';
-import { AlertTriangle, Check, Copy, ExternalLink, Mail, MessageSquare, Settings } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  ExternalLink,
+  FileText,
+  Mail,
+  MessageSquare,
+  RotateCcw,
+  Settings,
+} from 'lucide-react';
 import { buildMailComposeUrl, openInNewTab } from '../../utils/outlook';
 import {
-  buildMaternityEmail,
+  MESSAGE_TYPES,
+  buildMaternityMessage,
   buildTeamsAnnouncement,
   copyToClipboard,
 } from '../../utils/maternityTemplates';
@@ -47,12 +58,53 @@ function CopyButton({ text, label = 'העתקה' }) {
   );
 }
 
-/* Per-employee workflow: summary email to fixed recipients + Teams announcement */
+/* Choose between the short initial update and the full-details message */
+function MessageTypePicker({ value, onChange }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="radiogroup" aria-label="סוג ההודעה">
+      {MESSAGE_TYPES.map((t) => {
+        const active = t.key === value;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(t.key)}
+            className={`text-right rounded-xl border px-3 py-2.5 transition-colors ${
+              active
+                ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-200'
+                : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            <span className={`block text-sm font-semibold ${active ? 'text-blue-800' : 'text-gray-800'}`}>
+              {t.label}
+            </span>
+            <span className="block text-xs text-gray-500 mt-0.5 leading-snug">{t.description}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const buildAllMessages = (record, settings) =>
+  Object.fromEntries(MESSAGE_TYPES.map((t) => [t.key, buildMaternityMessage(t.key, record, settings)]));
+
+/* Per-employee workflow: update email (initial / full) to fixed recipients + Teams announcement */
 export default function MaternityActionsModal({ record, settings, onClose, onOpenSettings }) {
-  const initialEmail = buildMaternityEmail(record);
-  const [subject, setSubject] = useState(initialEmail.subject);
-  const [body, setBody] = useState(initialEmail.body);
-  const [teamsText, setTeamsText] = useState(() => buildTeamsAnnouncement(record));
+  const [messageType, setMessageType] = useState(MESSAGE_TYPES[0].key);
+  // Edits are kept per message type, so switching back and forth doesn't lose them
+  const [messages, setMessages] = useState(() => buildAllMessages(record, settings));
+  const [teamsText, setTeamsText] = useState(() => buildTeamsAnnouncement(record, settings));
+
+  const { subject, body } = messages[messageType];
+  const setField = (field) => (e) =>
+    setMessages((prev) => ({ ...prev, [messageType]: { ...prev[messageType], [field]: e.target.value } }));
+  const resetMessage = () =>
+    setMessages((prev) => ({ ...prev, [messageType]: buildMaternityMessage(messageType, record, settings) }));
+  const fresh = buildMaternityMessage(messageType, record, settings);
+  const edited = fresh.subject !== subject || fresh.body !== body;
 
   const recipients = settings?.notify_recipients ?? [];
   const teamsUrl = settings?.teams_channel_url;
@@ -80,6 +132,8 @@ export default function MaternityActionsModal({ record, settings, onClose, onOpe
           title="מייל עדכון לנמענים הקבועים"
           subtitle="נפתח כטיוטה ב-Outlook – שום דבר לא נשלח עד שתלחצו 'שלח'"
         >
+          <MessageTypePicker value={messageType} onChange={setMessageType} />
+
           {recipients.length ? (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs text-gray-500">אל:</span>
@@ -113,14 +167,14 @@ export default function MaternityActionsModal({ record, settings, onClose, onOpe
 
           <input
             value={subject}
-            onChange={(e) => setSubject(e.target.value)}
+            onChange={setField('subject')}
             aria-label="נושא"
             className={inputClass}
           />
           <textarea
             value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={11}
+            onChange={setField('body')}
+            rows={messageType === 'full' ? 14 : 8}
             aria-label="תוכן המייל"
             className={`${inputClass} resize-y leading-relaxed`}
           />
@@ -134,6 +188,25 @@ export default function MaternityActionsModal({ record, settings, onClose, onOpe
               פתיחה ב-Outlook
             </button>
             <CopyButton text={body} label="העתקת התוכן" />
+            {edited && (
+              <button
+                type="button"
+                onClick={resetMessage}
+                title="חזרה לטקסט שנוצר מהתבנית"
+                className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 px-2"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                איפוס
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onOpenSettings('templates')}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-pink-600 mr-auto self-center"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              עריכת תבניות ההודעות
+            </button>
           </div>
         </Section>
 

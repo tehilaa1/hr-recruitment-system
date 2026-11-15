@@ -82,11 +82,64 @@ class MaternityLeaveResponse(MaternityLeaveBase):
         return v if v in BABY_GENDERS else None
 
 
+# Placeholders usable in message templates, e.g. "{name}".
+# Must match TEMPLATE_PLACEHOLDERS in frontend/src/utils/maternityTemplates.js
+# (enforced by tests/test_maternity_fields_sync.py).
+TEMPLATE_PLACEHOLDERS: tuple[str, ...] = (
+    "name",
+    "phone",
+    "company_email",
+    "birth_date",
+    "baby_gender",
+    "baby_phrase",
+    "baby_heart",
+    "expected_return_date",
+    "gift_address",
+    "delivery_contact",
+    "attendance_updated",
+    "notes",
+)
+
+_PLACEHOLDER_RE = re.compile(r"\{([^{}\s]*)\}")
+_MAX_TEMPLATE_LENGTH = 5000
+
+
+class MaternityTemplates(BaseModel):
+    """User-customized message templates. "" = use the built-in default text."""
+
+    # הודעת עדכון ראשונית — short: she gave birth, HR will call for details
+    initial_subject: str = ""
+    initial_body: str = ""
+    # הודעה עם הפרטים המלאים — every detail of the record
+    full_subject: str = ""
+    full_body: str = ""
+    # Congratulations post for the Teams channel
+    teams_announcement: str = ""
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _check_template(cls, v):
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            return v
+        if len(v) > _MAX_TEMPLATE_LENGTH:
+            raise ValueError(f"תבנית ארוכה מדי (עד {_MAX_TEMPLATE_LENGTH} תווים)")
+        unknown = sorted(set(_PLACEHOLDER_RE.findall(v)) - set(TEMPLATE_PLACEHOLDERS))
+        if unknown:
+            raise ValueError(
+                "שדות לא מוכרים בתבנית: " + ", ".join("{" + u + "}" for u in unknown)
+            )
+        # Whitespace-only means "not customized"
+        return v if v.strip() else ""
+
+
 class MaternitySettings(BaseModel):
     """Module-wide settings, stored in Firestore at settings/maternity."""
 
     notify_recipients: List[str] = Field(default_factory=list)
     teams_channel_url: str = ""
+    templates: MaternityTemplates = Field(default_factory=MaternityTemplates)
 
     @field_validator("notify_recipients")
     @classmethod

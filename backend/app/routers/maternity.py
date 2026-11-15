@@ -36,8 +36,13 @@ async def get_maternity_settings(db: DB):
 
 @router.put("/settings", response_model=MaternitySettings)
 async def update_maternity_settings(payload: MaternitySettings, db: DB):
-    await asyncio.to_thread(db.set_settings_doc, _SETTINGS_DOC, payload.model_dump())
-    return payload
+    data = payload.model_dump()
+    if "templates" not in payload.model_fields_set:
+        # A client that doesn't know about templates must not wipe the saved ones
+        stored = await asyncio.to_thread(db.get_settings_doc, _SETTINGS_DOC)
+        data["templates"] = MaternitySettings.model_validate(stored).templates.model_dump()
+    await asyncio.to_thread(db.set_settings_doc, _SETTINGS_DOC, data)
+    return MaternitySettings.model_validate(data)
 
 
 # ------------------------------------------------------------------ #

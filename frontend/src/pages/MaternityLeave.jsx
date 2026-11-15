@@ -163,7 +163,7 @@ export default function MaternityLeave() {
 
   const [formRecord, setFormRecord] = useState(undefined); // undefined = closed, null = new
   const [actionsRecord, setActionsRecord] = useState(null);
-  const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState(null); // null = closed, else the tab to open
 
   const fetchAll = async () => {
     setLoading(true);
@@ -255,11 +255,11 @@ export default function MaternityLeave() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setShowSettings(true)}
+              onClick={() => setSettingsTab('recipients')}
               className="flex items-center gap-2 border border-gray-200 text-gray-600 hover:bg-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
             >
               <Settings className="h-4 w-4" />
-              הגדרות התראות
+              הגדרות ותבניות הודעות
             </button>
             <button
               onClick={() => setFormRecord(null)}
@@ -432,14 +432,21 @@ export default function MaternityLeave() {
       )}
       {actionsRecord && (
         <MaternityActionsModal
+          // Rebuild the texts if templates are edited from inside this modal
+          key={JSON.stringify(settings?.templates ?? null)}
           record={actionsRecord}
           settings={settings}
           onClose={() => setActionsRecord(null)}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={(tab) => setSettingsTab(typeof tab === 'string' ? tab : 'recipients')}
         />
       )}
-      {showSettings && (
-        <MaternitySettingsModal settings={settings} onClose={() => setShowSettings(false)} onSaved={setSettings} />
+      {settingsTab && (
+        <MaternitySettingsModal
+          settings={settings}
+          initialTab={settingsTab}
+          onClose={() => setSettingsTab(null)}
+          onSaved={setSettings}
+        />
       )}
     </div>
   );

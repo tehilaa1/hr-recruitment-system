@@ -1,10 +1,30 @@
 import { useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { FileText, Plus, Users, X } from 'lucide-react';
 import { apiErrorMessage, maternityApi } from '../../api/client';
+import { DEFAULT_TEMPLATES, effectiveTemplate } from '../../utils/maternityTemplates';
 import Modal, { inputClass, primaryButtonClass, secondaryButtonClass } from '../Modal';
+import MaternityTemplatesEditor, { unknownPlaceholders } from './MaternityTemplatesEditor';
 
-/* Edit the fixed notification recipients and the Teams channel link */
-export default function MaternitySettingsModal({ settings, onClose, onSaved }) {
+const TABS = [
+  { key: 'recipients', label: 'נמענים וערוצים', icon: Users },
+  { key: 'templates', label: 'תבניות הודעות', icon: FileText },
+];
+
+/* Text equal to the built-in default is saved as "" so future default updates apply */
+const toStoredTemplates = (templates) =>
+  Object.fromEntries(
+    Object.keys(DEFAULT_TEMPLATES).map((k) => {
+      const text = templates[k] ?? '';
+      return [k, text.trim() === DEFAULT_TEMPLATES[k].trim() ? '' : text];
+    })
+  );
+
+/* Edit the fixed notification recipients, the Teams channel link and the message templates */
+export default function MaternitySettingsModal({ settings, onClose, onSaved, initialTab = 'recipients' }) {
+  const [tab, setTab] = useState(initialTab);
+  const [templates, setTemplates] = useState(() =>
+    Object.fromEntries(Object.keys(DEFAULT_TEMPLATES).map((k) => [k, effectiveTemplate(settings, k)]))
+  );
   const [recipients, setRecipients] = useState(
     settings?.notify_recipients?.length ? settings.notify_recipients : ['']
   );
@@ -17,12 +37,25 @@ export default function MaternitySettingsModal({ settings, onClose, onSaved }) {
   const add = () => setRecipients((p) => [...p, '']);
 
   const handleSave = async () => {
+    const unknown = unknownPlaceholders(templates);
+    if (unknown.length) {
+      setTab('templates');
+      setError(`שדות לא מוכרים בתבנית: ${unknown.map((k) => `{${k}}`).join(', ')}`);
+      return;
+    }
+    const emptyKey = Object.keys(DEFAULT_TEMPLATES).find((k) => !templates[k]?.trim());
+    if (emptyKey) {
+      setTab('templates');
+      setError('אחת התבניות ריקה – כתבו טקסט או לחצו ״שחזור ברירת מחדל״');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
       const { data } = await maternityApi.saveSettings({
         notify_recipients: recipients.map((r) => r.trim()).filter(Boolean),
         teams_channel_url: teamsUrl.trim(),
+        templates: toStoredTemplates(templates),
       });
       onSaved(data);
       onClose();
@@ -38,6 +71,7 @@ export default function MaternitySettingsModal({ settings, onClose, onSaved }) {
       title="הגדרות התראות"
       subtitle="נשמר לכל המערכת ומשמש בכל שליחת עדכון"
       onClose={onClose}
+      maxWidth={tab === 'templates' ? 'max-w-3xl' : 'max-w-lg'}
       footer={
         <>
           <button type="button" onClick={onClose} className={secondaryButtonClass}>
@@ -49,6 +83,29 @@ export default function MaternitySettingsModal({ settings, onClose, onSaved }) {
         </>
       }
     >
+      <div className="flex gap-1 border-b border-gray-100 -mt-1 mb-5" role="tablist">
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === key
+                ? 'border-pink-500 text-pink-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'templates' ? (
+        <MaternityTemplatesEditor value={templates} onChange={setTemplates} />
+      ) : (
       <div className="space-y-6">
         <div>
           <p className="text-sm font-medium text-gray-700">נמענים קבועים למייל עדכון</p>
@@ -108,11 +165,12 @@ export default function MaternitySettingsModal({ settings, onClose, onSaved }) {
             className={inputClass}
           />
         </div>
-
-        {error && (
-          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
-        )}
       </div>
+      )}
+
+      {error && (
+        <p className="mt-5 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
+      )}
     </Modal>
   );
 }

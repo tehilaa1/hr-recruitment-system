@@ -14,16 +14,34 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.models.maternity import (  # noqa: E402
     BABY_GENDERS,
+    TEMPLATE_PLACEHOLDERS,
     BabyGender,
     MaternityLeaveBase,
     MaternityLeaveCreate,
     MaternityLeaveResponse,
     MaternityLeaveUpdate,
+    MaternitySettings,
+    MaternityTemplates,
 )
 
 FRONTEND_COLUMNS = (
     BACKEND_DIR.parent / "frontend" / "src" / "constants" / "maternityColumns.js"
 )
+FRONTEND_TEMPLATES = (
+    BACKEND_DIR.parent / "frontend" / "src" / "utils" / "maternityTemplates.js"
+)
+
+
+def _templates_object(name: str) -> str:
+    source = FRONTEND_TEMPLATES.read_text(encoding="utf-8")
+    match = re.search(rf"export const {name}\s*=\s*\{{(.*?)\n\}};", source, re.S)
+    assert match, f"{name} not found in {FRONTEND_TEMPLATES}"
+    return match.group(1)
+
+
+def _top_level_keys(body: str) -> list[str]:
+    # Object keys at two-space indentation, e.g. "  name: 'שם העובדת',"
+    return re.findall(r"^  (\w+):", body, re.M)
 
 
 def _source() -> str:
@@ -104,6 +122,41 @@ def test_baby_gender_validation():
     # Reading never fails on an unexpected stored value
     assert MaternityLeaveResponse(id="r1", baby_gender="boy").baby_gender is None
     assert MaternityLeaveResponse(id="r1").baby_gender is None
+
+
+def test_template_placeholders_match_frontend():
+    assert _top_level_keys(_templates_object("TEMPLATE_PLACEHOLDERS")) == list(TEMPLATE_PLACEHOLDERS)
+
+
+def test_template_keys_match_frontend_defaults():
+    assert set(_top_level_keys(_templates_object("DEFAULT_TEMPLATES"))) == set(
+        MaternityTemplates.model_fields
+    )
+
+
+def test_default_templates_use_only_known_placeholders():
+    used = set(re.findall(r"\{(\w+)\}", _templates_object("DEFAULT_TEMPLATES")))
+    assert used, "no placeholders found in DEFAULT_TEMPLATES"
+    assert used <= set(TEMPLATE_PLACEHOLDERS), used - set(TEMPLATE_PLACEHOLDERS)
+
+
+def test_templates_validation():
+    t = MaternityTemplates(initial_body="מזל טוב ל{name}! {baby_phrase}", full_body="   ")
+    assert t.initial_body.startswith("מזל טוב") and t.full_body == ""
+    for bad in ("{nmae}", "{}", "x" * 5001):
+        try:
+            MaternityTemplates(full_body=bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted invalid template {bad[:20]!r}")
+    # Plain braces that aren't placeholders (e.g. with spaces) are just text
+    assert MaternityTemplates(full_body="{ not a field }").full_body == "{ not a field }"
+
+
+def test_settings_without_templates_load_with_defaults():
+    s = MaternitySettings.model_validate({"notify_recipients": ["a@b.com"]})
+    assert s.templates == MaternityTemplates()
+    assert "templates" not in MaternitySettings(notify_recipients=[]).model_fields_set
 
 
 if __name__ == "__main__":
