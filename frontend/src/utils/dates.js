@@ -38,6 +38,19 @@ export function toIsraeliWorkday(iso) {
   return iso;
 }
 
+/*
+ * A wall-clock time on a date in the *browser's* time zone, as a UTC ISO string:
+ * ("2026-05-07", "10:00") in Israel (UTC+3) -> "2026-05-07T07:00:00Z".
+ * An explicit "Z" timestamp can't be misread as another zone by Outlook.
+ */
+export function localDateTimeToUtc(isoDate, hhmm) {
+  const m = ISO_RE.exec(String(isoDate || ''));
+  const t = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  if (!m || !t) return '';
+  const local = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(t[1]), Number(t[2]));
+  return Number.isNaN(local.getTime()) ? '' : local.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 /* Maternity leave in Israel: 15 weeks from the birth date */
 export const MATERNITY_LEAVE_DAYS = 15 * 7;
 /* Follow-up call with the employee about her return: 13 weeks after the birth */

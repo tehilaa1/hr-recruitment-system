@@ -7,13 +7,17 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import get_args
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.models.maternity import (  # noqa: E402
+    BABY_GENDERS,
+    BabyGender,
     MaternityLeaveBase,
     MaternityLeaveCreate,
+    MaternityLeaveResponse,
     MaternityLeaveUpdate,
 )
 
@@ -73,6 +77,33 @@ def test_is_completed_defaults_false_and_is_partially_updatable():
 
 def test_update_model_covers_all_fields():
     assert set(MaternityLeaveUpdate.model_fields) == set(MaternityLeaveBase.model_fields)
+
+
+def _frontend_options(key: str) -> list[str]:
+    entry = re.search(rf"\{{\s*key:\s*'{key}'[^{{}}]*?options:\s*\[([^\]]*)\]", _source())
+    assert entry, f"no options for {key!r} in {FRONTEND_COLUMNS}"
+    return re.findall(r"'([^']+)'", entry.group(1))
+
+
+def test_baby_gender_options_match_backend():
+    assert get_args(BabyGender) == BABY_GENDERS
+    assert _frontend_options("baby_gender") == list(BABY_GENDERS)
+
+
+def test_baby_gender_validation():
+    assert MaternityLeaveCreate(name="דנה", baby_gender="בת").baby_gender == "בת"
+    # The form sends "" when nothing is chosen; it is stored as null
+    assert MaternityLeaveCreate(name="דנה", baby_gender="").baby_gender is None
+    assert MaternityLeaveUpdate(baby_gender="").model_dump(exclude_unset=True) == {"baby_gender": None}
+    try:
+        MaternityLeaveCreate(name="דנה", baby_gender="boy")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown baby_gender was accepted")
+    # Reading never fails on an unexpected stored value
+    assert MaternityLeaveResponse(id="r1", baby_gender="boy").baby_gender is None
+    assert MaternityLeaveResponse(id="r1").baby_gender is None
 
 
 if __name__ == "__main__":

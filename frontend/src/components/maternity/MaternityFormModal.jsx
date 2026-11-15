@@ -43,6 +43,30 @@ function FieldInput({ field, value, onChange, autoFocus }) {
           ))}
         </div>
       );
+    case 'choice':
+      // Segmented buttons; clicking the selected option again clears it
+      return (
+        <div className="flex gap-2" role="radiogroup" aria-label={field.formLabel ?? field.label}>
+          {field.options.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              role="radio"
+              aria-checked={value === opt}
+              onClick={() => onChange(value === opt ? '' : opt)}
+              className={`flex-1 border rounded-lg py-2 text-sm font-medium transition-colors ${
+                value === opt
+                  ? opt === 'בן'
+                    ? 'border-sky-400 bg-sky-50 text-sky-700'
+                    : 'border-pink-400 bg-pink-50 text-pink-700'
+                  : 'border-gray-200 text-gray-500 hover:border-gray-300'
+              }`}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      );
     case 'textarea':
       return (
         <textarea
@@ -90,7 +114,7 @@ function AutoReturnDate({ birthDate, value, onFill }) {
 function Label({ field }) {
   return (
     <label htmlFor={`mat-${field.key}`} className="block text-sm font-medium text-gray-700 mb-1.5">
-      {field.label}
+      {field.formLabel ?? field.label}
       {field.required && <span className="text-red-500"> *</span>}
     </label>
   );

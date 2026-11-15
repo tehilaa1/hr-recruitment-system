@@ -112,6 +112,20 @@ function Cell({ col, record, onToggle, toggling }) {
       ) : (
         <Empty />
       );
+    case 'choice':
+      return value ? (
+        <span
+          className={`px-2.5 py-1 rounded-full text-xs font-medium border whitespace-nowrap ${
+            value === 'בן'
+              ? 'bg-sky-50 text-sky-700 border-sky-200'
+              : 'bg-pink-50 text-pink-700 border-pink-200'
+          }`}
+        >
+          {value}
+        </span>
+      ) : (
+        <Empty />
+      );
     case 'boolean':
       return (
         <button

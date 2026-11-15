@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -15,12 +15,24 @@ from pydantic import BaseModel, Field, field_validator
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Baby's sex as shown in the UI and messages ("בן" = boy, "בת" = girl).
+# Must match the `options` of baby_gender in frontend/src/constants/maternityColumns.js
+# (enforced by tests/test_maternity_fields_sync.py).
+BABY_GENDERS: tuple[str, ...] = ("בן", "בת")
+BabyGender = Literal[BABY_GENDERS]  # type: ignore[valid-type]
+
+
+def _blank_to_none(v):
+    """The form sends "" for "not chosen"; store that as null."""
+    return None if isinstance(v, str) and not v.strip() else v
+
 
 class MaternityLeaveBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     phone: str = ""
     company_email: str = ""
     birth_date: Optional[date] = None
+    baby_gender: Optional[BabyGender] = None
     expected_return_date: Optional[date] = None
     gift_address: str = ""
     delivery_contact_name: str = ""
@@ -29,6 +41,8 @@ class MaternityLeaveBase(BaseModel):
     notes: str = ""
     # "סיום טיפול - יולדת חזרה": the employee is back; the record is kept but closed
     is_completed: bool = False
+
+    _baby_gender_blank = field_validator("baby_gender", mode="before")(_blank_to_none)
 
 
 class MaternityLeaveCreate(MaternityLeaveBase):
@@ -42,6 +56,7 @@ class MaternityLeaveUpdate(BaseModel):
     phone: Optional[str] = None
     company_email: Optional[str] = None
     birth_date: Optional[date] = None
+    baby_gender: Optional[BabyGender] = None
     expected_return_date: Optional[date] = None
     gift_address: Optional[str] = None
     delivery_contact_name: Optional[str] = None
@@ -50,6 +65,8 @@ class MaternityLeaveUpdate(BaseModel):
     notes: Optional[str] = None
     is_completed: Optional[bool] = None
 
+    _baby_gender_blank = field_validator("baby_gender", mode="before")(_blank_to_none)
+
 
 class MaternityLeaveResponse(MaternityLeaveBase):
     # Relaxed for reading so older/partial documents never break the list
@@ -57,6 +74,12 @@ class MaternityLeaveResponse(MaternityLeaveBase):
     id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    @field_validator("baby_gender", mode="before")
+    @classmethod
+    def _unknown_gender_is_unset(cls, v):
+        # Unknown values in old/hand-edited documents read as "not set" instead of failing the list
+        return v if v in BABY_GENDERS else None
 
 
 class MaternitySettings(BaseModel):

@@ -9,7 +9,7 @@
  * VITE_OUTLOOK_BASE_URL in frontend/.env to switch.
  */
 import { formatIsoDate } from '../constants/maternityColumns';
-import { returnFollowupDate } from './dates';
+import { localDateTimeToUtc, returnFollowupDate } from './dates';
 
 const OUTLOOK_BASE_URL =
   import.meta.env.VITE_OUTLOOK_BASE_URL || 'https://outlook.office.com';
@@ -97,14 +97,35 @@ export function buildMaternityReminderUrl(record) {
     `תאריך חזרה משוער: ${formatIsoDate(record.expected_return_date) || '—'}`,
   ].join('\n');
 
-  const query = buildQuery({
+  return buildCalendarEventUrl({
     subject: `יצירת קשר עם יולדת לבדיקת מועד חזרה${name ? ` - ${name}` : ''}`,
     body,
-    // No time-zone suffix: Outlook reads these as the user's local time
-    startdt: `${date}T10:00:00`,
-    enddt: `${date}T10:30:00`,
+    start: localDateTimeToUtc(date, REMINDER_START),
+    end: localDateTimeToUtc(date, REMINDER_END),
   });
-  return `${OUTLOOK_BASE_URL}/calendar/0/deeplink/compose?${query}`;
+}
+
+const REMINDER_START = '10:00';
+const REMINDER_END = '10:30';
+
+/*
+ * New-event form with a fixed date/time already filled in.
+ * Uses the "add event" compose route (rru=addevent + path), which pre-fills
+ * startdt/enddt reliably; times are UTC ISO strings ("…Z") so Outlook shows
+ * them in the user's own time zone without guessing.
+ */
+export function buildCalendarEventUrl({ subject, body, start, end, location }) {
+  const query = buildQuery({
+    path: '/calendar/action/compose',
+    rru: 'addevent',
+    allday: 'false',
+    startdt: start,
+    enddt: end,
+    subject,
+    body,
+    location,
+  });
+  return `${OUTLOOK_BASE_URL}/calendar/0/action/compose?${query}`;
 }
 
 export function openInNewTab(url) {

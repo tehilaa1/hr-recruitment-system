@@ -6,16 +6,19 @@
  *   2. add the matching field in backend/app/models/maternity.py
  *      (MaternityLeaveBase + MaternityLeaveUpdate)
  *
- * Field types: text | tel | email | date | boolean | textarea
+ * Field types: text | tel | email | date | boolean | textarea | choice
  * A "group" entry shows several fields in one table column / one form row.
  * Options: required, placeholder, wide (full-width in the form),
- *          tableWidth (Tailwind min-width class).
+ *          tableWidth (Tailwind min-width class), formLabel (form-only label),
+ *          options (values of a "choice" field; empty = not chosen -> null).
  */
 export const MATERNITY_COLUMNS = [
   { key: 'name', label: 'שם', type: 'text', required: true, placeholder: 'שם מלא', tableWidth: 'min-w-[140px]' },
   { key: 'phone', label: 'טלפון', type: 'tel', placeholder: '050-0000000', tableWidth: 'min-w-[120px]' },
   { key: 'company_email', label: 'מייל חברה', type: 'email', placeholder: 'name@company.com', tableWidth: 'min-w-[180px]' },
   { key: 'birth_date', label: 'תאריך לידה', type: 'date', tableWidth: 'min-w-[110px]' },
+  // options must match BABY_GENDERS in backend/app/models/maternity.py
+  { key: 'baby_gender', label: 'בן / בת', formLabel: 'מין הרך הנולד', type: 'choice', options: ['בן', 'בת'], tableWidth: 'min-w-[80px]' },
   { key: 'expected_return_date', label: 'תאריך חזרה משוער', type: 'date', tableWidth: 'min-w-[130px]' },
   { key: 'gift_address', label: 'כתובת לשליחת מתנה', type: 'text', wide: true, placeholder: 'רחוב, מספר, עיר', tableWidth: 'min-w-[170px]' },
   {
@@ -57,7 +60,7 @@ export function toMaternityPayload(form) {
     MATERNITY_FIELDS.map((f) => {
       const v = form[f.key];
       if (f.type === 'boolean') return [f.key, Boolean(v)];
-      if (f.type === 'date') return [f.key, v || null];
+      if (f.type === 'date' || f.type === 'choice') return [f.key, v || null];
       return [f.key, typeof v === 'string' ? v.trim() : v ?? ''];
     })
   );
