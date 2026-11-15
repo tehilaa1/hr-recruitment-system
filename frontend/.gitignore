@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# Local env files hold Firebase config — keep them out of git.
+# (.env.production is committed on purpose: it only contains the public backend URL.)
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store

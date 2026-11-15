@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.dependencies import get_firestore_service
-from app.routers import candidates, jobs, maternity, search, users
+from app.routers import candidates, jobs, maternity, search, talent_pool, users
 from app.security import require_member
 
 logging.basicConfig(
@@ -44,6 +44,7 @@ app.include_router(jobs.router, dependencies=_members_only)
 app.include_router(candidates.router, dependencies=_members_only)
 app.include_router(search.router, dependencies=_members_only)
 app.include_router(maternity.router, dependencies=_members_only)
+app.include_router(talent_pool.router, dependencies=_members_only)
 
 # Auth/users routers enforce their own rules (any member for /me, admin for /api/users)
 app.include_router(users.auth_router)

@@ -1,4 +1,4 @@
-import { Baby, Briefcase } from 'lucide-react';
+import { Baby, Briefcase, Library } from 'lucide-react';
 
 /*
  * Top-level HR modules. Drives both the home page cards and the navbar tabs,
@@ -16,6 +16,19 @@ export const HR_MODULES = [
       icon: 'bg-blue-100 text-blue-600',
       ring: 'hover:border-blue-300 hover:shadow-blue-100',
       cta: 'text-blue-600',
+    },
+  },
+  {
+    key: 'talent-pool',
+    path: '/talent-pool',
+    title: 'מאגר מועמדים',
+    description:
+      'מאגר קורות חיים כללי שאינו משויך למשרה: העלאה ופענוח אוטומטי, הוספה ידנית, חיפוש וסינון, והתאמה חכמה של מועמדים למשרות פתוחות.',
+    icon: Library,
+    accent: {
+      icon: 'bg-teal-100 text-teal-600',
+      ring: 'hover:border-teal-300 hover:shadow-teal-100',
+      cta: 'text-teal-600',
     },
   },
   {

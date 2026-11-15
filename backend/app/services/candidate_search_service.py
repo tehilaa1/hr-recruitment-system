@@ -10,27 +10,33 @@ from app.services.dedup_service import normalize_email, normalize_phone
 _MIN_PHONE_QUERY_DIGITS = 3
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
+# Internal marker on talent-pool records while grouping (never returned)
+_POOL = "_from_talent_pool"
+
 
 def search_candidates(
     query: str,
     candidates: list[dict],
     jobs_by_id: dict[str, dict],
     limit: int = 20,
+    pool_candidates: list[dict] | None = None,
 ) -> list[dict]:
-    """Search candidates across all jobs and return merged person profiles.
+    """Search candidates across all jobs and the talent pool; return merged person profiles.
 
-    Candidate records sharing an email or phone are merged into one person, so
-    a match on any of a person's records returns their full application history.
+    Records sharing an email or phone are merged into one person, so a match on
+    any of a person's records returns their full application history plus
+    their talent-pool entries (if any).
     """
     query = (query or "").strip()
     if not query:
         return []
 
-    groups = _group_by_identity(candidates)
+    records = list(candidates) + [{**c, _POOL: True} for c in pool_candidates or []]
+    groups = _group_by_identity(records)
     matched = [g for g in groups if any(_matches(query, c) for c in g)]
 
     profiles = [_build_profile(g, jobs_by_id) for g in matched]
-    profiles.sort(key=lambda p: _latest_created(p["applications"]), reverse=True)
+    profiles.sort(key=lambda p: p.pop("_latest"), reverse=True)
     return profiles[:limit]
 
 
@@ -130,10 +136,6 @@ def _created(c: dict) -> datetime:
     return _EPOCH
 
 
-def _latest_created(applications: list[dict]) -> datetime:
-    return max((_created(a) for a in applications), default=_EPOCH)
-
-
 def _unique(values, key=lambda v: v.lower()) -> list[str]:
     seen, out = set(), []
     for v in values:
@@ -159,7 +161,17 @@ def _build_profile(records: list[dict], jobs_by_id: dict[str, dict]) -> dict:
         years = 0
 
     applications = []
+    pool_entries = []
     for r in records:
+        if r.get(_POOL):
+            pool_entries.append(
+                {
+                    "pool_id": r["id"],
+                    "file_name": r.get("file_name") or "",
+                    "created_at": r.get("created_at") if isinstance(r.get("created_at"), datetime) else None,
+                }
+            )
+            continue
         job = jobs_by_id.get(r.get("job_id") or "")
         job_exists = job is not None
         job = job or {}
@@ -188,4 +200,8 @@ def _build_profile(records: list[dict], jobs_by_id: dict[str, dict]) -> dict:
         "profession": str(latest("profession") or ""),
         "years_of_experience": years,
         "applications": applications,
+        "in_talent_pool": bool(pool_entries),
+        "talent_pool_entries": pool_entries,
+        # Sort key for search results (popped before returning)
+        "_latest": _created(records[0]),
     }

@@ -57,3 +57,12 @@ class CandidateDeduplicator:
         if phone and phone in self._by_phone:
             return "phone", self._by_phone[phone]
         return None
+
+
+def exclude_existing(candidates: list[dict], existing: list[dict]) -> list[dict]:
+    """`candidates` minus anyone matching `existing` by normalized email or phone.
+
+    Used to keep people who already applied to a job out of pool suggestions.
+    """
+    dedup = CandidateDeduplicator(existing)
+    return [c for c in candidates if dedup.find(c) is None]

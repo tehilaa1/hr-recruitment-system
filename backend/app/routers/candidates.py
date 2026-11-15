@@ -10,11 +10,14 @@ from fastapi import status as http_status
 from app.dependencies import get_firestore_service, get_gemini_service
 from app.models.candidate import (
     DEFAULT_STATUS,
+    CandidateCompletionUpdate,
+    CandidateCreate,
     CandidateResponse,
     CandidateStatusUpdate,
     CandidateUpdate,
     CandidateUploadResult,
 )
+from app.services.cv_ingest_service import describe_duplicate, ingest_cvs
 from app.services.dedup_service import CandidateDeduplicator
 from app.services.firestore_service import FirestoreService
 from app.services.gemini_service import GeminiService
@@ -26,7 +29,10 @@ router = APIRouter(prefix="/api/jobs/{job_id}/candidates", tags=["Candidates"])
 DB = Annotated[FirestoreService, Depends(get_firestore_service)]
 AI = Annotated[GeminiService, Depends(get_gemini_service)]
 
-_ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png", "webp", "docx", "doc"}
+# Fields copied when a person enters a job from the talent pool or a manual form
+_PERSON_FIELDS = (
+    "full_name", "family_name", "phone", "email", "address", "profession", "years_of_experience",
+)
 
 
 # ------------------------------------------------------------------ #
@@ -45,78 +51,55 @@ async def upload_candidates(
     ai: AI,
     files: list[UploadFile] = File(...),
 ):
-    job = await asyncio.to_thread(db.get_job, job_id)
-    if job is None:
-        raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"Job {job_id!r} not found")
+    """Parse every CV in parallel (bounded by GEMINI_MAX_CONCURRENCY), then save."""
+    await _assert_job(job_id, db)
 
     existing = await asyncio.to_thread(db.list_candidates, job_id)
-    dedup = CandidateDeduplicator(existing)
+    results = await ingest_cvs(
+        files,
+        ai,
+        CandidateDeduplicator(existing),
+        save=lambda data: db.create_candidate(job_id, data),
+        duplicate_message=_duplicate_message,
+        extra_fields={"recruitment_status": DEFAULT_STATUS, "is_completed": False},
+    )
+    return [CandidateUploadResult(**r) for r in results]
 
-    results: list[CandidateUploadResult] = []
 
-    for upload in files:
-        file_name = upload.filename or "unknown"
-        ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+# ------------------------------------------------------------------ #
+# Manual entry & assignment from the talent pool                      #
+# ------------------------------------------------------------------ #
 
-        if ext not in _ALLOWED_EXTENSIONS:
-            results.append(
-                CandidateUploadResult(
-                    file_name=file_name,
-                    success=False,
-                    error=(
-                        f"Unsupported extension '.{ext}'. "
-                        f"Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}"
-                    ),
-                )
-            )
-            continue
 
-        try:
-            content = await upload.read()
-            content_type = upload.content_type or "application/octet-stream"
+@router.post("", response_model=CandidateResponse, status_code=http_status.HTTP_201_CREATED)
+async def create_candidate(job_id: str, payload: CandidateCreate, db: DB):
+    """Add a candidate without a CV file (same duplicate check as uploads)."""
+    await _assert_job(job_id, db)
+    data = {**payload.model_dump(), "is_completed": False, "file_name": ""}
+    return await _create_unless_duplicate(job_id, data, db)
 
-            parsed = await asyncio.to_thread(ai.parse_cv, content, file_name, content_type)
 
-            match = dedup.find(parsed)
-            if match:
-                field, existing_candidate = match
-                logger.info(
-                    "Skipping duplicate candidate from %r for job %s (matched on %s, existing id %s)",
-                    file_name, job_id, field, existing_candidate.get("id"),
-                )
-                results.append(
-                    CandidateUploadResult(
-                        file_name=file_name,
-                        success=False,
-                        duplicate=True,
-                        duplicate_of_id=existing_candidate.get("id"),
-                        error=_duplicate_message(field, existing_candidate),
-                    )
-                )
-                continue
-
-            candidate_data = {
-                **parsed,
-                "recruitment_status": DEFAULT_STATUS,
-                "file_name": file_name,
-            }
-            saved = await asyncio.to_thread(db.create_candidate, job_id, candidate_data)
-            dedup.add(saved)
-            results.append(
-                CandidateUploadResult(
-                    file_name=file_name,
-                    success=True,
-                    candidate=CandidateResponse(**saved),
-                )
-            )
-
-        except Exception as exc:
-            logger.exception("Failed to process file %r for job %s", file_name, job_id)
-            results.append(
-                CandidateUploadResult(file_name=file_name, success=False, error=str(exc))
-            )
-
-    return results
+@router.post(
+    "/from-pool/{pool_candidate_id}",
+    response_model=CandidateResponse,
+    status_code=http_status.HTTP_201_CREATED,
+)
+async def assign_from_pool(job_id: str, pool_candidate_id: str, db: DB):
+    """Copy a talent-pool candidate into this job (the pool record is kept)."""
+    await _assert_job(job_id, db)
+    pooled = await asyncio.to_thread(db.get_pool_candidate, pool_candidate_id)
+    if pooled is None:
+        raise HTTPException(
+            http_status.HTTP_404_NOT_FOUND, "המועמד לא נמצא במאגר"
+        )
+    data = {
+        **{f: pooled.get(f, 0 if f == "years_of_experience" else "") for f in _PERSON_FIELDS},
+        "recruitment_status": DEFAULT_STATUS,
+        "is_completed": False,
+        "file_name": pooled.get("file_name", ""),
+        "source_pool_id": pool_candidate_id,
+    }
+    return await _create_unless_duplicate(job_id, data, db)
 
 
 # ------------------------------------------------------------------ #
@@ -167,6 +150,21 @@ async def update_candidate_status(
     return result
 
 
+@router.patch("/{candidate_id}/complete", response_model=CandidateResponse)
+async def update_candidate_completion(
+    job_id: str, candidate_id: str, payload: CandidateCompletionUpdate, db: DB
+):
+    """Toggle "סיום טיפול" — the recruiter is done handling this candidate."""
+    result = await asyncio.to_thread(
+        db.update_candidate,
+        job_id,
+        candidate_id,
+        {"is_completed": payload.is_completed},
+    )
+    _assert_candidate(result, candidate_id)
+    return result
+
+
 @router.delete("/{candidate_id}", status_code=http_status.HTTP_204_NO_CONTENT)
 async def delete_candidate(job_id: str, candidate_id: str, db: DB):
     deleted = await asyncio.to_thread(db.delete_candidate, job_id, candidate_id)
@@ -182,12 +180,21 @@ async def delete_candidate(job_id: str, candidate_id: str, db: DB):
 
 
 def _duplicate_message(field: str, existing: dict) -> str:
-    name = " ".join(
-        p for p in (existing.get("full_name"), existing.get("family_name")) if p
-    ) or "ללא שם"
-    field_label = "אותה כתובת מייל" if field == "email" else "אותו מספר טלפון"
-    value = existing.get("email") if field == "email" else existing.get("phone")
+    name, field_label, value = describe_duplicate(field, existing)
     return f"מועמד עם {field_label} ({value}) כבר קיים במשרה: {name}. הקובץ לא נוסף."
+
+
+async def _create_unless_duplicate(job_id: str, data: dict, db: FirestoreService) -> dict:
+    existing = await asyncio.to_thread(db.list_candidates, job_id)
+    match = CandidateDeduplicator(existing).find(data)
+    if match:
+        field, existing_candidate = match
+        name, field_label, value = describe_duplicate(field, existing_candidate)
+        raise HTTPException(
+            http_status.HTTP_409_CONFLICT,
+            f"מועמד עם {field_label} ({value}) כבר קיים במשרה: {name}.",
+        )
+    return await asyncio.to_thread(db.create_candidate, job_id, data)
 
 
 async def _assert_job(job_id: str, db: FirestoreService) -> None:

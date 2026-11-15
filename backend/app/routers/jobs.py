@@ -5,19 +5,23 @@ import logging
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi import status as http_status
 
-from app.dependencies import get_firestore_service
+from app.dependencies import get_firestore_service, get_gemini_service
 from app.models.job import JobCreate, JobResponse, JobUpdate
+from app.models.talent_pool import PoolMatch
+from app.services.dedup_service import exclude_existing
 from app.services.export_service import generate_xlsx
 from app.services.firestore_service import FirestoreService
+from app.services.gemini_service import GeminiParseError, GeminiService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
 
 DB = Annotated[FirestoreService, Depends(get_firestore_service)]
+AI = Annotated[GeminiService, Depends(get_gemini_service)]
 
 
 # ------------------------------------------------------------------ #
@@ -69,6 +73,48 @@ async def delete_job(job_id: str, db: DB):
     deleted = await asyncio.to_thread(db.delete_job, job_id)
     if not deleted:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"Job {job_id!r} not found")
+
+
+# ------------------------------------------------------------------ #
+# AI matching against the talent pool                                  #
+# ------------------------------------------------------------------ #
+
+
+@router.post("/{job_id}/match-pool", response_model=list[PoolMatch])
+async def match_pool_candidates(
+    job_id: str, db: DB, ai: AI, limit: int = Query(5, ge=1, le=10)
+):
+    """Suggest talent-pool candidates for this job, with a Hebrew reason for each.
+
+    People who already applied to the job (same normalized email/phone) are excluded.
+    """
+    job = await asyncio.to_thread(db.get_job, job_id)
+    _assert_job(job, job_id)
+
+    pool, applied = await asyncio.gather(
+        asyncio.to_thread(db.list_pool_candidates),
+        asyncio.to_thread(db.list_candidates, job_id),
+    )
+    available = exclude_existing(pool, applied)
+    if not available:
+        return []
+
+    try:
+        ranked = await asyncio.to_thread(
+            ai.match_candidates,
+            str(job.get("job_title") or ""),
+            str(job.get("description") or ""),
+            available,
+            limit,
+        )
+    except GeminiParseError as exc:
+        raise HTTPException(http_status.HTTP_502_BAD_GATEWAY, str(exc))
+
+    by_id = {c["id"]: c for c in available}
+    return [
+        PoolMatch(candidate=by_id[m["id"]], score=m["score"], match_reason=m["match_reason"])
+        for m in ranked
+    ]
 
 
 # ------------------------------------------------------------------ #

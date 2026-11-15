@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # Single source of truth for recruitment statuses (stored as-is in Firestore).
 # Must stay identical, in the same order, to RECRUITMENT_STATUSES in
@@ -34,8 +34,44 @@ class CandidateBase(BaseModel):
     years_of_experience: int = 0
 
 
+class CandidateManualBase(BaseModel):
+    """Details typed in by a recruiter (no CV file). A first name is required."""
+
+    full_name: str = Field(..., max_length=100)
+    family_name: str = Field("", max_length=100)
+    phone: str = Field("", max_length=40)
+    email: str = Field("", max_length=200)
+    address: str = Field("", max_length=300)
+    profession: str = Field("", max_length=200)
+    years_of_experience: int = Field(0, ge=0, le=70)
+
+    @field_validator(
+        "full_name", "family_name", "phone", "email", "address", "profession", mode="before"
+    )
+    @classmethod
+    def _strip(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("full_name")
+    @classmethod
+    def _require_name(cls, v: str) -> str:
+        if not v:
+            raise ValueError("שם פרטי הוא שדה חובה")
+        return v
+
+
+class CandidateCreate(CandidateManualBase):
+    """Manual candidate entry for a job."""
+
+    recruitment_status: RecruitmentStatus = DEFAULT_STATUS
+
+
 class CandidateStatusUpdate(BaseModel):
     recruitment_status: RecruitmentStatus
+
+
+class CandidateCompletionUpdate(BaseModel):
+    is_completed: bool
 
 
 class CandidateUpdate(BaseModel):
@@ -47,13 +83,16 @@ class CandidateUpdate(BaseModel):
     profession: Optional[str] = None
     years_of_experience: Optional[int] = None
     recruitment_status: Optional[RecruitmentStatus] = None
+    is_completed: Optional[bool] = None
 
 
 class CandidateResponse(CandidateBase):
     id: str
     job_id: str
     recruitment_status: RecruitmentStatus
-    file_name: str
+    # "סיום טיפול" — recruiter is done with this candidate (missing in older records)
+    is_completed: bool = False
+    file_name: str = ""
     created_at: datetime
 
 
@@ -71,8 +110,16 @@ class CandidateApplication(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class TalentPoolEntry(BaseModel):
+    """This person's record in the global talent pool."""
+
+    pool_id: str
+    file_name: str = ""
+    created_at: Optional[datetime] = None
+
+
 class CandidateProfile(BaseModel):
-    """A person across all jobs (records merged by matching email or phone)."""
+    """A person across all jobs and the talent pool (records merged by email or phone)."""
 
     key: str
     full_name: str = ""
@@ -83,6 +130,8 @@ class CandidateProfile(BaseModel):
     profession: str = ""
     years_of_experience: int = 0
     applications: list[CandidateApplication] = []
+    in_talent_pool: bool = False
+    talent_pool_entries: list[TalentPoolEntry] = []
 
 
 class CandidateUploadResult(BaseModel):

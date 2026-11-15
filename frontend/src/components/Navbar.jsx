@@ -6,8 +6,8 @@ import UserMenu from './UserMenu';
 
 export default function Navbar() {
   const { pathname } = useLocation();
-  // Global candidate search belongs to the jobs & candidates module
-  const inJobsModule = pathname.startsWith('/jobs');
+  // Global candidate search (jobs + talent pool) belongs to the candidate modules
+  const showSearch = pathname.startsWith('/jobs') || pathname.startsWith('/talent-pool');
 
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
@@ -40,7 +40,7 @@ export default function Navbar() {
             ))}
           </div>
 
-          <div className="flex-1 flex justify-end">{inJobsModule && <GlobalSearch />}</div>
+          <div className="flex-1 flex justify-end">{showSearch && <GlobalSearch />}</div>
           <UserMenu />
         </div>
       </div>

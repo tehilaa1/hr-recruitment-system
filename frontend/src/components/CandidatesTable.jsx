@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { CalendarPlus, Mail, Trash2, UserX } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { CalendarPlus, CheckCircle2, Circle, Mail, Trash2, UserX } from 'lucide-react';
 import StatusSelect from './StatusSelect';
 import {
   buildInterviewInviteUrl,
@@ -44,6 +44,36 @@ function OutlookAction({ candidate, job }) {
   return null;
 }
 
+/* "סיום טיפול" toggle — marks that the recruiter is done with this candidate */
+function CompleteToggle({ completed, disabled, onToggle }) {
+  return completed ? (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      title="החזרה לטיפול"
+      aria-pressed="true"
+      className="group/done flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-white hover:text-gray-600 hover:border-gray-200 transition-colors disabled:opacity-50 disabled:cursor-wait"
+    >
+      <CheckCircle2 className="h-3.5 w-3.5" />
+      <span className="group-hover/done:hidden">טופל</span>
+      <span className="hidden group-hover/done:inline">החזרה לטיפול</span>
+    </button>
+  ) : (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      title="סמן שהטיפול במועמד הסתיים"
+      aria-pressed="false"
+      className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium border border-gray-200 text-gray-500 hover:border-emerald-300 hover:text-emerald-700 hover:bg-emerald-50 transition-colors disabled:opacity-50 disabled:cursor-wait"
+    >
+      <Circle className="h-3.5 w-3.5" />
+      סיום טיפול
+    </button>
+  );
+}
+
 const COLUMNS = [
   { key: 'full_name',            label: 'שם פרטי',       width: 'min-w-[110px]' },
   { key: 'family_name',          label: 'שם משפחה',      width: 'min-w-[110px]' },
@@ -53,15 +83,39 @@ const COLUMNS = [
   { key: 'profession',           label: 'מקצוע',         width: 'min-w-[120px]' },
   { key: 'years_of_experience',  label: 'שנות ניסיון',   width: 'min-w-[90px]'  },
   { key: 'recruitment_status',   label: 'סטטוס גיוס',    width: 'min-w-[160px]' },
+  { key: 'is_completed',         label: 'סיום טיפול',    width: 'min-w-[120px]' },
 ];
 
-export default function CandidatesTable({ candidates, job, onStatusChange, onDelete }) {
+/* Active candidates first; completed ones sink to the bottom (order otherwise kept) */
+const activeFirst = (list) =>
+  list
+    .map((c, i) => [c, i])
+    .sort(([a, ai], [b, bi]) => Number(!!a.is_completed) - Number(!!b.is_completed) || ai - bi)
+    .map(([c]) => c);
+
+export default function CandidatesTable({ candidates, job, onStatusChange, onToggleComplete, onDelete }) {
   const [updatingId, setUpdatingId] = useState(null);
+  const [completingIds, setCompletingIds] = useState(() => new Set());
+  const sorted = useMemo(() => activeFirst(candidates), [candidates]);
+  const completedCount = useMemo(() => candidates.filter((c) => c.is_completed).length, [candidates]);
 
   const handleStatusChange = async (candidateId, status) => {
     setUpdatingId(candidateId);
     await onStatusChange(candidateId, status);
     setUpdatingId(null);
+  };
+
+  const handleToggleComplete = async (candidate) => {
+    setCompletingIds((prev) => new Set(prev).add(candidate.id));
+    try {
+      await onToggleComplete(candidate.id, !candidate.is_completed);
+    } finally {
+      setCompletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(candidate.id);
+        return next;
+      });
+    }
   };
 
   if (candidates.length === 0) {
@@ -72,7 +126,7 @@ export default function CandidatesTable({ candidates, job, onStatusChange, onDel
         </div>
         <div>
           <p className="text-gray-500 font-medium">אין מועמדים עדיין</p>
-          <p className="text-sm text-gray-400 mt-1">העלה קורות חיים למעלה כדי להתחיל</p>
+          <p className="text-sm text-gray-400 mt-1">העלו קורות חיים או הוסיפו מועמד ידנית כדי להתחיל</p>
         </div>
       </div>
     );
@@ -98,10 +152,19 @@ export default function CandidatesTable({ candidates, job, onStatusChange, onDel
 
         {/* Body */}
         <tbody className="divide-y divide-gray-100">
-          {candidates.map((c) => (
+          {sorted.map((c, idx) => (
             <tr
               key={c.id}
-              className="hover:bg-blue-50/30 transition-colors group"
+              className={`transition-colors group ${
+                c.is_completed
+                  ? 'bg-gray-50/80 text-gray-400 [&>td:not(.keep-color)]:opacity-60 hover:bg-gray-100/70'
+                  : 'hover:bg-blue-50/30'
+              } ${
+                // Visual divider between active and completed candidates
+                c.is_completed && idx === sorted.length - completedCount && idx > 0
+                  ? 'border-t-2 border-t-gray-200'
+                  : ''
+              }`}
             >
               {/* שם פרטי */}
               <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">
@@ -179,6 +242,15 @@ export default function CandidatesTable({ candidates, job, onStatusChange, onDel
                   />
                   <OutlookAction candidate={c} job={job} />
                 </div>
+              </td>
+
+              {/* סיום טיפול */}
+              <td className="keep-color px-4 py-3 whitespace-nowrap">
+                <CompleteToggle
+                  completed={!!c.is_completed}
+                  disabled={completingIds.has(c.id)}
+                  onToggle={() => handleToggleComplete(c)}
+                />
               </td>
 
               {/* Delete */}

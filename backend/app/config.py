@@ -3,12 +3,18 @@ from __future__ import annotations
 import base64
 import json
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, List, Optional, Union
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Local dev frontends — always allowed so `npm run dev` works against any backend.
+# backend/ — so relative credential paths work no matter which directory uvicorn starts from
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+# Where Render mounts Secret Files
+_RENDER_SECRETS_DIR = Path("/etc/secrets")
+
 _DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
 
 
@@ -32,6 +38,9 @@ class Settings(BaseSettings):
 
     # Max retries on the same model before moving to the next one.
     GEMINI_RETRIES_PER_MODEL: int = 2
+
+    # How many CVs are parsed in parallel per process (keeps batches under rate limits).
+    GEMINI_MAX_CONCURRENCY: int = 4
 
     # Accepts a JSON list or a comma-separated string, e.g.
     # CORS_ORIGINS=https://my-frontend.onrender.com,https://hr.example.com
@@ -72,7 +81,22 @@ class Settings(BaseSettings):
                 return json.loads(raw)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"FIREBASE_CREDENTIALS_JSON is not valid JSON: {exc}") from exc
-        return self.GOOGLE_APPLICATION_CREDENTIALS or self.FIREBASE_CREDENTIALS_PATH
+        return _resolve_credentials_path(
+            self.GOOGLE_APPLICATION_CREDENTIALS or self.FIREBASE_CREDENTIALS_PATH
+        )
+
+
+def _resolve_credentials_path(configured: str) -> str:
+    """Find the service-account file: as given (absolute or relative to the CWD),
+    relative to backend/, or as a Render Secret File in /etc/secrets/.
+    Returns the configured value unchanged if none exist (the caller logs the error)."""
+    path = Path(configured).expanduser()
+    candidates = [path] if path.is_absolute() else [path, _BACKEND_DIR / path]
+    candidates.append(_RENDER_SECRETS_DIR / path.name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return configured
 
 
 @lru_cache()

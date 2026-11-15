@@ -6,6 +6,7 @@ import JobDetails from './pages/JobDetails';
 import JobsDashboard from './pages/JobsDashboard';
 import Login from './pages/Login';
 import MaternityLeave from './pages/MaternityLeave';
+import TalentPool from './pages/TalentPool';
 import UserManagement from './pages/UserManagement';
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/jobs" element={<JobsDashboard />} />
             <Route path="/jobs/:jobId" element={<JobDetails />} />
+            <Route path="/talent-pool" element={<TalentPool />} />
             <Route path="/maternity" element={<MaternityLeave />} />
           </Route>
 

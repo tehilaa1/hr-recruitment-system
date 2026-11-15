@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CheckCircle, Copy, FileText, Image, Loader2, Upload, X, XCircle } from 'lucide-react';
-import { candidatesApi } from '../api/client';
+import { apiErrorMessage } from '../api/client';
 
 const ACCEPTED = '.pdf,.docx,.doc,.png,.jpg,.jpeg';
 const ACCEPT_LABEL = 'PDF, Word (.docx), תמונה (PNG, JPG)';
@@ -17,10 +17,61 @@ const formatBytes = (bytes) => {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 };
 
-export default function UploadBox({ jobId, onUploadComplete }) {
+/* Seconds since `active` became true (resets when it turns false) */
+function useElapsedSeconds(active) {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    if (!active) { setSeconds(0); return undefined; }
+    const started = Date.now();
+    const id = setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return seconds;
+}
+
+/* Progress shown while a batch is being sent and parsed */
+function UploadProgress({ fileCount, percent }) {
+  const sending = percent < 100;
+  const elapsed = useElapsedSeconds(true);
+  return (
+    <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4 space-y-2.5" role="status" aria-live="polite">
+      <div className="flex items-center justify-between text-sm">
+        <span className="flex items-center gap-2 font-medium text-blue-800">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {sending
+            ? `מעלה ${fileCount} ${fileCount === 1 ? 'קובץ' : 'קבצים'}… ${percent}%`
+            : `ה-AI מעבד ${fileCount === 1 ? 'את קורות החיים' : `${fileCount} קורות חיים במקביל`}…`}
+        </span>
+        <span className="text-xs text-blue-500 tabular-nums">{elapsed} שנ׳</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-blue-100 overflow-hidden">
+        {sending ? (
+          <div className="h-full bg-blue-500 transition-all duration-200" style={{ width: `${percent}%` }} />
+        ) : (
+          <div className="h-full w-1/3 bg-blue-500 rounded-full animate-progress-indeterminate" />
+        )}
+      </div>
+      {!sending && (
+        <p className="text-xs text-blue-600/80">
+          המועמדים יופיעו בטבלה אוטומטית בסיום העיבוד — אין צורך לרענן את הדף.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/*
+ * onUpload(files, onProgress) → axios promise resolving to per-file results
+ * onUploadComplete(savedCandidates) → called with the successfully saved records
+ * onUploadFinished() → always called afterwards (success *or* failure) so the
+ *   parent can re-fetch: a request that timed out may still have saved candidates.
+ */
+export default function UploadBox({ onUpload, onUploadComplete, onUploadFinished }) {
   const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [uploadCount, setUploadCount] = useState(0);
   const [results, setResults] = useState(null);
   const dragCounter = useRef(0);
   const inputRef = useRef(null);
@@ -57,18 +108,24 @@ export default function UploadBox({ jobId, onUploadComplete }) {
   const removeFile = (i) => setFiles((prev) => prev.filter((_, idx) => idx !== i));
 
   const handleUpload = async () => {
-    if (!files.length) return;
+    if (!files.length || uploading) return;
     setUploading(true);
+    setProgress(0);
+    setUploadCount(files.length);
     try {
-      const { data } = await candidatesApi.upload(jobId, files);
+      const { data } = await onUpload(files, setProgress);
       setResults(data);
       setFiles([]);
       const successful = data.filter((r) => r.success && r.candidate).map((r) => r.candidate);
-      onUploadComplete(successful);
-    } catch {
-      setResults([{ file_name: 'שגיאה', success: false, error: 'שגיאה בהעלאה. נסה שנית.' }]);
+      onUploadComplete?.(successful);
+    } catch (err) {
+      const message = err?.response
+        ? apiErrorMessage(err, 'שגיאה בהעלאה. נסה שנית.')
+        : 'החיבור לשרת נקטע לפני סיום העיבוד. ייתכן שחלק מהמועמדים נשמרו — הרשימה רועננה, בדקו לפני העלאה חוזרת.';
+      setResults([{ file_name: 'שגיאה', success: false, error: message }]);
     } finally {
       setUploading(false);
+      onUploadFinished?.();
     }
   };
 
@@ -194,7 +251,9 @@ export default function UploadBox({ jobId, onUploadComplete }) {
                 <span className="text-xs text-gray-400 flex-shrink-0">{formatBytes(file.size)}</span>
                 <button
                   onClick={() => removeFile(i)}
-                  className="text-gray-300 hover:text-red-500 transition-colors p-0.5 flex-shrink-0"
+                  disabled={uploading}
+                  title="הסר קובץ"
+                  className="text-gray-300 hover:text-red-500 transition-colors p-0.5 flex-shrink-0 disabled:invisible"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -204,25 +263,19 @@ export default function UploadBox({ jobId, onUploadComplete }) {
         </div>
       )}
 
-      {/* Upload button */}
-      {files.length > 0 && (
-        <button
-          onClick={handleUpload}
-          disabled={uploading}
-          className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded-xl py-2.5 text-sm font-semibold transition-colors"
-        >
-          {uploading ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              מעבד קורות חיים...
-            </>
-          ) : (
-            <>
-              <Upload className="h-4 w-4" />
-              העלה {files.length} {files.length === 1 ? 'קובץ' : 'קבצים'}
-            </>
-          )}
-        </button>
+      {/* Progress / upload button */}
+      {uploading ? (
+        <UploadProgress fileCount={uploadCount} percent={progress} />
+      ) : (
+        files.length > 0 && (
+          <button
+            onClick={handleUpload}
+            className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-2.5 text-sm font-semibold transition-colors"
+          >
+            <Upload className="h-4 w-4" />
+            העלה {files.length} {files.length === 1 ? 'קובץ' : 'קבצים'}
+          </button>
+        )
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Search, X } from 'lucide-react';
+import { Library, Loader2, Search, X } from 'lucide-react';
 import { searchApi } from '../api/client';
 import CandidateProfileModal from './CandidateProfileModal';
 import StatusBadge from './StatusBadge';
@@ -10,7 +10,16 @@ const DEBOUNCE_MS = 300;
 const fullName = (p) =>
   [p.full_name, p.family_name].filter(Boolean).join(' ') || 'ללא שם';
 
-/* Search candidates across all jobs; selecting a result opens their profile */
+function PoolBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-50 text-teal-700 border border-teal-200 whitespace-nowrap">
+      <Library className="h-3 w-3" />
+      מאגר מועמדים
+    </span>
+  );
+}
+
+/* Search candidates across all jobs and the talent pool; selecting a result opens their profile */
 export default function GlobalSearch() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -100,7 +109,7 @@ export default function GlobalSearch() {
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={handleKeyDown}
-          placeholder="חיפוש מועמד בכל המשרות – שם, מייל או טלפון"
+          placeholder="חיפוש מועמד בכל המשרות ובמאגר – שם, מייל או טלפון"
           aria-label="חיפוש מועמדים גלובלי"
           className="w-full bg-gray-100 focus:bg-white border border-transparent focus:border-blue-300 focus:ring-2 focus:ring-blue-100 rounded-xl py-2 pr-9 pl-9 text-sm outline-none transition-colors [&::-webkit-search-cancel-button]:hidden"
         />
@@ -131,7 +140,8 @@ export default function GlobalSearch() {
           ) : (
             <ul className="max-h-96 overflow-y-auto divide-y divide-gray-50">
               {results.map((p, i) => {
-                const latest = p.applications?.[0];
+                const apps = p.applications ?? [];
+                const latest = apps[0];
                 return (
                   <li key={p.key}>
                     <button
@@ -149,12 +159,17 @@ export default function GlobalSearch() {
                         </p>
                       </div>
                       <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        {latest && <StatusBadge status={latest.recruitment_status} />}
-                        <span className="text-[11px] text-gray-400">
-                          {p.applications.length === 1
-                            ? latest.job_title
-                            : `${p.applications.length} משרות`}
-                        </span>
+                        {latest ? <StatusBadge status={latest.recruitment_status} /> : p.in_talent_pool && <PoolBadge />}
+                        {apps.length > 0 && (
+                          <span className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                            {apps.length === 1 ? latest.job_title : `${apps.length} משרות`}
+                            {p.in_talent_pool && (
+                              <span className="flex items-center gap-0.5 text-teal-600" title="נמצא גם במאגר המועמדים">
+                                · <Library className="h-3 w-3" /> במאגר
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </div>
                     </button>
                   </li>

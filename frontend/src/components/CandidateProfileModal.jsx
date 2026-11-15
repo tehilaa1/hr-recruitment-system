@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   Briefcase,
   ChevronLeft,
+  FileText,
+  Library,
   Mail,
   MapPin,
   Phone,
@@ -44,6 +46,12 @@ export default function CandidateProfileModal({ profile, onClose }) {
   const name =
     [profile.full_name, profile.family_name].filter(Boolean).join(' ') || 'ללא שם';
   const apps = profile.applications ?? [];
+  const pool = profile.talent_pool_entries ?? [];
+
+  const goToPool = () => {
+    onClose();
+    navigate('/talent-pool');
+  };
 
   const goToJob = (jobId) => {
     onClose();
@@ -68,7 +76,15 @@ export default function CandidateProfileModal({ profile, onClose }) {
               <User className="h-5 w-5" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-lg font-bold text-gray-900 truncate">{name}</h2>
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="text-lg font-bold text-gray-900 truncate">{name}</h2>
+                {profile.in_talent_pool && (
+                  <span className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-50 text-teal-700 border border-teal-200">
+                    <Library className="h-3 w-3" />
+                    במאגר המועמדים
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-gray-400 mt-0.5">
                 {[
                   profile.profession,
@@ -119,12 +135,47 @@ export default function CandidateProfileModal({ profile, onClose }) {
           )}
         </div>
 
+        {/* Talent pool */}
+        {pool.length > 0 && (
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-3">
+              <Library className="h-4 w-4 text-teal-500" />
+              מאגר המועמדים
+            </h3>
+            <button
+              type="button"
+              onClick={goToPool}
+              title="מעבר למאגר המועמדים"
+              className="w-full flex flex-col gap-1.5 rounded-xl border border-teal-100 bg-teal-50/50 hover:bg-teal-50 px-4 py-3 text-right transition-colors"
+            >
+              {pool.map((e) => (
+                <span key={e.pool_id} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="flex items-center gap-1.5 text-gray-700 min-w-0">
+                    <FileText className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
+                    <span className="truncate">{e.file_name || 'הוזן ידנית'}</span>
+                  </span>
+                  <span className="flex items-center gap-1 text-xs text-gray-500 whitespace-nowrap">
+                    נוסף {formatDate(e.created_at)}
+                    <ChevronLeft className="h-4 w-4 text-gray-300" />
+                  </span>
+                </span>
+              ))}
+            </button>
+          </div>
+        )}
+
         {/* Applications */}
         <div className="px-6 py-4">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-3">
             <Briefcase className="h-4 w-4 text-gray-400" />
             משרות שהמועמד הגיש אליהן ({apps.length})
           </h3>
+          {apps.length === 0 ? (
+            <p className="text-sm text-gray-500 bg-gray-50 rounded-xl px-4 py-3">
+              המועמד עדיין לא שויך לאף משרה. ניתן לשייך אותו מתוך עמוד המשרה, בלחיצה על
+              {' '}״הצעות מועמדים מהמאגר״.
+            </p>
+          ) : (
           <div className="border border-gray-100 rounded-xl overflow-hidden">
             <table className="w-full text-sm">
               <thead>
@@ -163,6 +214,7 @@ export default function CandidateProfileModal({ profile, onClose }) {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       </div>
     </div>

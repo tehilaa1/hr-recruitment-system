@@ -21,4 +21,5 @@ def get_gemini_service() -> GeminiService:
         primary_model=settings.GEMINI_MODEL,
         fallback_models=settings.GEMINI_FALLBACK_MODELS,
         retries_per_model=settings.GEMINI_RETRIES_PER_MODEL,
+        max_concurrency=settings.GEMINI_MAX_CONCURRENCY,
     )

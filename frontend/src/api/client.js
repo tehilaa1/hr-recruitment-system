@@ -59,6 +59,27 @@ export const jobsApi = {
   remove: (id) => http.delete(`/api/jobs/${id}`),
   exportExcel: (id) =>
     http.get(`/api/jobs/${id}/export-excel`, { responseType: 'blob' }),
+  /* AI-ranked talent-pool candidates for this job: [{ candidate, score, match_reason }] */
+  matchPool: (id) => http.post(`/api/jobs/${id}/match-pool`),
+};
+
+/* multipart upload of CV files, reporting byte-upload progress (0–100) */
+const uploadFiles = (url, files, onProgress) => {
+  const form = new FormData();
+  files.forEach((f) => form.append('files', f));
+  return http.post(url, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
+    },
+  });
+};
+
+export const talentPoolApi = {
+  list: () => http.get('/api/talent-pool'),
+  upload: (files, onProgress) => uploadFiles('/api/talent-pool/upload', files, onProgress),
+  create: (data) => http.post('/api/talent-pool', data),
+  remove: (id) => http.delete(`/api/talent-pool/${id}`),
 };
 
 export const searchApi = {
@@ -102,17 +123,24 @@ export function filenameFromDisposition(header, fallback) {
 export const candidatesApi = {
   list: (jobId) => http.get(`/api/jobs/${jobId}/candidates`),
 
-  upload: (jobId, files) => {
-    const form = new FormData();
-    files.forEach((f) => form.append('files', f));
-    return http.post(`/api/jobs/${jobId}/candidates/upload`, form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-  },
+  upload: (jobId, files, onProgress) =>
+    uploadFiles(`/api/jobs/${jobId}/candidates/upload`, files, onProgress),
+
+  /* Manual entry, no CV file */
+  create: (jobId, data) => http.post(`/api/jobs/${jobId}/candidates`, data),
+
+  /* Copy a talent-pool candidate into this job */
+  assignFromPool: (jobId, poolCandidateId) =>
+    http.post(`/api/jobs/${jobId}/candidates/from-pool/${poolCandidateId}`),
 
   updateStatus: (jobId, candidateId, status) =>
     http.patch(`/api/jobs/${jobId}/candidates/${candidateId}/status`, {
       recruitment_status: status,
+    }),
+
+  setCompleted: (jobId, candidateId, isCompleted) =>
+    http.patch(`/api/jobs/${jobId}/candidates/${candidateId}/complete`, {
+      is_completed: isCompleted,
     }),
 
   remove: (jobId, candidateId) =>

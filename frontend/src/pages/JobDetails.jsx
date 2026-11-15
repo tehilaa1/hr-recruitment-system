@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -8,11 +8,14 @@ import {
   Mail,
   MapPin,
   RefreshCw,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { candidatesApi, filenameFromDisposition, jobsApi } from '../api/client';
+import CandidateFormModal from '../components/CandidateFormModal';
 import CandidatesTable from '../components/CandidatesTable';
 import Navbar from '../components/Navbar';
+import PoolSuggestions from '../components/PoolSuggestions';
 import UploadBox from '../components/UploadBox';
 
 /* ── Tiny helpers ── */
@@ -76,6 +79,13 @@ function ErrorPage({ onRetry }) {
   );
 }
 
+function candidatesSubtitle(candidates) {
+  if (!candidates.length) return null;
+  const total = `${candidates.length} מועמד${candidates.length !== 1 ? 'ים' : ''}`;
+  const done = candidates.filter((c) => c.is_completed).length;
+  return done ? `${total} · ${done} טופלו` : total;
+}
+
 /* ── Job Details Page ── */
 export default function JobDetails() {
   const { jobId } = useParams();
@@ -86,6 +96,11 @@ export default function JobDetails() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showManualAdd, setShowManualAdd] = useState(false);
+  // Ignore responses from a previous job if the user navigated meanwhile
+  const jobIdRef = useRef(jobId);
+  jobIdRef.current = jobId;
 
   const fetchAll = async () => {
     setLoading(true);
@@ -105,6 +120,35 @@ export default function JobDetails() {
   };
 
   useEffect(() => { fetchAll(); }, [jobId]);
+
+  /* Background re-fetch of the candidate list + job stats (no full-page spinner) */
+  const refreshCandidates = useCallback(async () => {
+    const forJob = jobId;
+    setRefreshing(true);
+    try {
+      const [jobRes, candidatesRes] = await Promise.all([
+        jobsApi.get(forJob),
+        candidatesApi.list(forJob),
+      ]);
+      if (jobIdRef.current !== forJob) return;
+      setJob(jobRes.data);
+      setCandidates(candidatesRes.data);
+    } catch {
+      // Keep what we have; the optimistic merge already shows the new candidates
+    } finally {
+      if (jobIdRef.current === forJob) setRefreshing(false);
+    }
+  }, [jobId]);
+
+  /* Add records returned by the server, skipping ids already in the list */
+  const mergeCandidates = (incoming) => {
+    if (!incoming.length) return;
+    setCandidates((prev) => {
+      const known = new Set(prev.map((c) => c.id));
+      return [...incoming.filter((c) => !known.has(c.id)), ...prev];
+    });
+    setJob((prev) => (prev ? { ...prev, candidate_count: (prev.candidate_count || 0) + incoming.length } : prev));
+  };
 
   /* Optimistic status update */
   const setCandidateStatus = (candidateId, status) =>
@@ -133,11 +177,36 @@ export default function JobDetails() {
     }
   };
 
+  /* Optimistic "סיום טיפול" toggle, rolled back on error (same pattern as status) */
+  const handleToggleComplete = async (candidateId, isCompleted) => {
+    setCandidates((prev) =>
+      prev.map((c) => (c.id === candidateId ? { ...c, is_completed: isCompleted } : c))
+    );
+    try {
+      await candidatesApi.setCompleted(jobId, candidateId, isCompleted);
+    } catch {
+      setCandidates((prev) =>
+        prev.map((c) =>
+          c.id === candidateId && c.is_completed === isCompleted
+            ? { ...c, is_completed: !isCompleted }
+            : c
+        )
+      );
+      alert('שגיאה בעדכון סיום הטיפול – השינוי בוטל');
+    }
+  };
+
+  const handleManualAdd = async (payload) => {
+    const { data } = await candidatesApi.create(jobId, payload);
+    mergeCandidates([data]);
+  };
+
   const handleDeleteCandidate = async (candidateId) => {
     if (!window.confirm('האם למחוק מועמד זה?')) return;
     try {
       await candidatesApi.remove(jobId, candidateId);
       setCandidates((prev) => prev.filter((c) => c.id !== candidateId));
+      setJob((prev) => (prev ? { ...prev, candidate_count: Math.max(0, (prev.candidate_count || 1) - 1) } : prev));
     } catch {
       alert('שגיאה במחיקת המועמד');
     }
@@ -166,11 +235,9 @@ export default function JobDetails() {
     }
   };
 
-  const handleUploadComplete = (newCandidates) => {
-    if (newCandidates.length) {
-      setCandidates((prev) => [...newCandidates, ...prev]);
-    }
-  };
+  // Show the saved candidates immediately; UploadBox then calls refreshCandidates
+  // (also after errors/timeouts, when some files may have been saved anyway)
+  const handleUploadComplete = (newCandidates) => mergeCandidates(newCandidates);
 
   if (loading) return <LoadingPage />;
   if (fetchError) return <ErrorPage onRetry={fetchAll} />;
@@ -255,30 +322,67 @@ export default function JobDetails() {
         {/* ── Upload box ── */}
         <SectionCard
           title="העלאת קורות חיים"
-          subtitle="PDF, Word (.docx), תמונה (PNG, JPG)"
+          subtitle="PDF, Word (.docx), תמונה (PNG, JPG) — מספר קבצים מעובדים במקביל"
+          action={
+            <button
+              type="button"
+              onClick={() => setShowManualAdd(true)}
+              className="flex items-center gap-2 border border-blue-200 text-blue-700 hover:bg-blue-50 px-3.5 py-2 rounded-xl text-sm font-medium transition-colors flex-shrink-0"
+            >
+              <UserPlus className="h-4 w-4" />
+              הוספת מועמד ידנית
+            </button>
+          }
         >
           <div className="p-6">
-            <UploadBox jobId={jobId} onUploadComplete={handleUploadComplete} />
+            <UploadBox
+              onUpload={(files, onProgress) => candidatesApi.upload(jobId, files, onProgress)}
+              onUploadComplete={handleUploadComplete}
+              onUploadFinished={refreshCandidates}
+            />
           </div>
+        </SectionCard>
+
+        {/* ── AI suggestions from the talent pool ── */}
+        <SectionCard
+          title="הצעות מועמדים מהמאגר"
+          subtitle="התאמה חכמה בין מאגר קורות החיים לדרישות המשרה"
+        >
+          <PoolSuggestions key={jobId} jobId={jobId} onAssigned={(c) => mergeCandidates([c])} />
         </SectionCard>
 
         {/* ── Candidates table ── */}
         <SectionCard
           title="מועמדים"
-          subtitle={
-            candidates.length
-              ? `${candidates.length} מועמד${candidates.length !== 1 ? 'ים' : ''}`
-              : null
+          subtitle={candidatesSubtitle(candidates)}
+          action={
+            refreshing && (
+              <span className="flex items-center gap-1.5 text-xs text-gray-400" role="status">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                מרענן…
+              </span>
+            )
           }
         >
           <CandidatesTable
             candidates={candidates}
             job={job}
             onStatusChange={handleStatusChange}
+            onToggleComplete={handleToggleComplete}
             onDelete={handleDeleteCandidate}
           />
         </SectionCard>
       </main>
+
+      {showManualAdd && (
+        <CandidateFormModal
+          title="הוספת מועמד ידנית"
+          subtitle={job.job_title}
+          withStatus
+          onSubmit={handleManualAdd}
+          onClose={() => setShowManualAdd(false)}
+        />
+      )}
     </div>
   );
 }

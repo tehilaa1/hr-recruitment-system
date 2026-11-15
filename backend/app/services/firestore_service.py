@@ -141,6 +141,39 @@ class FirestoreService:
         return {"id": updated.id, **updated.to_dict()}
 
     # ------------------------------------------------------------------ #
+    # Talent pool (top-level; CVs not tied to a job)                       #
+    # Its own collection name, so the "candidates" collection-group query  #
+    # used by global search never picks these up.                          #
+    # ------------------------------------------------------------------ #
+
+    _TALENT_POOL = "talent_pool"
+
+    def create_pool_candidate(self, data: dict) -> dict:
+        data["created_at"] = datetime.now(timezone.utc)
+        ref = self._db.collection(self._TALENT_POOL).document()
+        ref.set(data)
+        return {"id": ref.id, **data}
+
+    def get_pool_candidate(self, candidate_id: str) -> Optional[dict]:
+        doc = self._db.collection(self._TALENT_POOL).document(candidate_id).get()
+        return {"id": doc.id, **doc.to_dict()} if doc.exists else None
+
+    def list_pool_candidates(self) -> list[dict]:
+        docs = (
+            self._db.collection(self._TALENT_POOL)
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .stream()
+        )
+        return [{"id": d.id, **d.to_dict()} for d in docs]
+
+    def delete_pool_candidate(self, candidate_id: str) -> bool:
+        ref = self._db.collection(self._TALENT_POOL).document(candidate_id)
+        if not ref.get().exists:
+            return False
+        ref.delete()
+        return True
+
+    # ------------------------------------------------------------------ #
     # Maternity leaves                                                     #
     # ------------------------------------------------------------------ #
 
