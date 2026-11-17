@@ -21,6 +21,7 @@ from app.models.budget import (  # noqa: E402
     BudgetEventUpdate,
     DEFAULT_EXPENSE_STATUS,
     EXPENSE_STATUSES,
+    INVOICE_MAX_BYTES,
     EventStatus,
     ExpenseCreate,
     ExpenseResponse,
@@ -105,6 +106,13 @@ def test_expense_statuses_in_sync_with_frontend():
     assert set(EXPENSE_STATUSES) <= styled, set(EXPENSE_STATUSES) - styled
     source = FRONTEND_BUDGETS.read_text(encoding="utf-8")
     assert f"DEFAULT_EXPENSE_STATUS = '{DEFAULT_EXPENSE_STATUS}'" in source
+
+
+def test_invoice_size_limit_in_sync_with_frontend():
+    source = FRONTEND_BUDGETS.read_text(encoding="utf-8")
+    match = re.search(r"export const INVOICE_MAX_BYTES\s*=\s*([\d\s*]+);", source)
+    assert match, "INVOICE_MAX_BYTES not found in budgets.js"
+    assert eval(match.group(1)) == INVOICE_MAX_BYTES == 5 * 1024 * 1024  # digits and * only
 
 
 def test_expense_model_validation():

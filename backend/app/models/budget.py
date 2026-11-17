@@ -8,7 +8,11 @@ Firestore layout (hierarchical):
     annual_budgets/{year}/events/{event_id}/expenses/{expense_id}
                                              item_name, quantity, unit_price,
                                              total_price, status, notes,
-                                             invoice_reference, timestamps
+                                             invoice_reference, invoice_file, timestamps
+    .../expenses/{expense_id}/invoice_chunks/{0000..}
+                                             the uploaded invoice (PDF/PNG/JPG) as raw
+                                             bytes, split to stay under Firestore's
+                                             1 MiB document limit
 
 Once an event has itemized expenses, its actual_spent is the sum of their
 total_price (kept in sync by FirestoreService on every expense write); events
@@ -20,7 +24,7 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal, Optional
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Must stay identical, in the same order, to EVENT_STATUSES in
 # frontend/src/constants/budgets.js (enforced by tests/test_budgets.py).
@@ -159,6 +163,25 @@ class ExpenseUpdate(BaseModel):
     invoice_reference: Optional[str] = Field(None, max_length=500)
 
 
+# Uploaded invoice files (validated by content, not by the browser's MIME type).
+# INVOICE_MAX_BYTES must match frontend/src/constants/budgets.js (tests/test_budgets.py).
+INVOICE_MAX_BYTES = 5 * 1024 * 1024
+INVOICE_CONTENT_TYPES: dict[str, str] = {
+    "application/pdf": ".pdf",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+}
+
+
+class InvoiceFile(BaseModel):
+    """Metadata of an expense's uploaded invoice (the bytes live in invoice_chunks)."""
+
+    file_name: str
+    content_type: str
+    size: int
+    uploaded_at: Optional[datetime] = None
+
+
 class ExpenseResponse(BaseModel):
     # Relaxed for reading so older/partial documents never break the list
     id: str
@@ -169,5 +192,17 @@ class ExpenseResponse(BaseModel):
     status: str = DEFAULT_EXPENSE_STATUS
     notes: str = ""
     invoice_reference: str = ""
+    invoice_file: Optional[InvoiceFile] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    @field_validator("invoice_file", mode="before")
+    @classmethod
+    def _broken_file_is_unset(cls, v):
+        # A malformed/hand-edited value reads as "no file" instead of failing the list
+        if not isinstance(v, dict):
+            return None
+        try:
+            return InvoiceFile.model_validate(v)
+        except ValueError:
+            return None

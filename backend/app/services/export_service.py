@@ -13,7 +13,9 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 CellKind = Literal["auto", "text", "number", "money", "date", "bool"]
 
 _MONEY_FORMAT = '#,##0.00 "₪"'
-_DATE_FORMAT = "DD/MM/YYYY"
+# Lower-case tokens: upper-case D/Y aren't date codes in every Excel locale (or in
+# LibreOffice/Numbers), which then showed "DD/06/YYYY" (only MM = month matched)
+_DATE_FORMAT = "dd/mm/yyyy"
 
 
 @dataclass(frozen=True)
@@ -45,7 +47,7 @@ CANDIDATE_COLUMNS: tuple[Column, ...] = (
 MATERNITY_EXPORT_COLUMNS: tuple[Column, ...] = (
     Column("name", "שם העובדת", 22),
     Column("phone", "טלפון", 16, "text"),
-    Column("company_email", "מייל בחברה", 30, "text"),
+    Column("company_email", "מייל חברה", 30, "text"),
     Column("birth_date", "תאריך לידה", 14, "date"),
     Column("expected_return_date", "תאריך חזרה לעבודה", 18, "date"),
     Column("attendance_updated", "עודכן בנוכחות", 14, "bool"),
@@ -59,7 +61,8 @@ EXPENSE_COLUMNS: tuple[Column, ...] = (
     Column("unit_price", "מחיר ליחידה", 14, "money"),
     Column("total_price", "סכום כולל", 15, "money"),
     Column("status", "סטטוס תשלום", 16, "text"),
-    Column("invoice_reference", "אסמכתת חשבונית", 26, "text"),
+    Column("invoice_reference", "מס׳ חשבונית / אסמכתא", 22, "text"),
+    Column("invoice_file_name", "קובץ חשבונית", 24, "text"),
     Column("notes", "הערות", 36, "text"),
 )
 
@@ -154,8 +157,14 @@ def generate_expenses_xlsx(event: dict, expenses: list[dict], summary: dict) -> 
         ("תקציב מוקצה", {"total_price": event.get("allocated_budget") or 0}),
         ("יתרה בתקציב", {"total_price": round((event.get("allocated_budget") or 0) - summary["total"], 2)}),
     ]
+    # The file itself stays in the app; the sheet shows which one is attached
+    rows_out = [
+        {**e, "invoice_file_name": (e.get("invoice_file") or {}).get("file_name", "")
+         if isinstance(e.get("invoice_file"), dict) else ""}
+        for e in expenses
+    ]
     return build_xlsx(
-        expenses,
+        rows_out,
         EXPENSE_COLUMNS,
         "פירוט הוצאות",
         title=f"{name} {year} – פירוט הוצאות" if year else f"{name} – פירוט הוצאות",

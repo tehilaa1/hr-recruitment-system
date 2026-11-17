@@ -28,6 +28,24 @@ export const EXPENSE_STATUS_STYLES = {
   'ישולם בהעברה': 'bg-orange-50 text-orange-700 border-orange-200',
 };
 
+// Invoice files of expenses. INVOICE_MAX_BYTES must match backend/app/models/budget.py
+// (backend/tests/test_budgets.py); the server re-checks size and real file type.
+export const INVOICE_MAX_BYTES = 5 * 1024 * 1024;
+export const INVOICE_ACCEPT = '.pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg';
+const INVOICE_EXTENSIONS = /\.(pdf|png|jpe?g)$/i;
+
+/* null if the file can be uploaded, else a Hebrew error message */
+export function invoiceFileError(file) {
+  if (!file) return 'לא נבחר קובץ';
+  if (!INVOICE_EXTENSIONS.test(file.name)) return 'ניתן לצרף קובץ PDF, PNG או JPG בלבד';
+  if (file.size === 0) return 'הקובץ ריק';
+  if (file.size > INVOICE_MAX_BYTES) return `הקובץ גדול מדי (${formatFileSize(file.size)}; עד 5MB)`;
+  return null;
+}
+
+export const formatFileSize = (bytes) =>
+  bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`;
+
 /* Quick-pick names in the "new event" form */
 export const COMMON_EVENTS = [
   'ראש השנה',

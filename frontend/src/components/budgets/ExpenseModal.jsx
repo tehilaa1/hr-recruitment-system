@@ -1,6 +1,15 @@
-import { useState } from 'react';
-import { apiErrorMessage, budgetsApi } from '../../api/client';
-import { DEFAULT_EXPENSE_STATUS, EXPENSE_STATUSES, EXPENSE_STATUS_STYLES, formatIls } from '../../constants/budgets';
+import { useRef, useState } from 'react';
+import { Eye, FileText, Image as ImageIcon, Trash2, Upload } from 'lucide-react';
+import { apiErrorMessage, budgetsApi, openFileInNewTab } from '../../api/client';
+import {
+  DEFAULT_EXPENSE_STATUS,
+  EXPENSE_STATUSES,
+  EXPENSE_STATUS_STYLES,
+  INVOICE_ACCEPT,
+  formatFileSize,
+  formatIls,
+  invoiceFileError,
+} from '../../constants/budgets';
 import Modal, { secondaryButtonClass } from '../Modal';
 import { MoneyInput, amberInput, amberPrimary } from './budgetUi';
 
@@ -27,6 +36,27 @@ export default function ExpenseModal({ year, event, expense, onClose, onSaved })
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Invoice file: a newly picked File, and/or removal of the stored one
+  const [newFile, setNewFile] = useState(null);
+  const [removeStored, setRemoveStored] = useState(false);
+  const [fileError, setFileError] = useState('');
+  const fileInput = useRef(null);
+  const storedFile = isEdit && !removeStored ? expense.invoice_file : null;
+  const hasInvoice = Boolean(newFile || storedFile || form.invoice_reference.trim());
+
+  const pickFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // picking the same file again still fires onChange
+    if (!file) return;
+    const problem = invoiceFileError(file);
+    setFileError(problem || '');
+    if (!problem) setNewFile(file);
+  };
+
+  const viewStored = () =>
+    openFileInNewTab(() => budgetsApi.getInvoice(year, event.id, expense.id), expense.invoice_file.file_name).catch(
+      (err) => setFileError(apiErrorMessage(err, 'שגיאה בפתיחת הקובץ'))
+    );
 
   const set = (k) => (v) => setForm((p) => ({ ...p, [k]: v?.target ? v.target.value : v }));
 
@@ -73,6 +103,13 @@ export default function ExpenseModal({ year, event, expense, onClose, onSaved })
       const { data } = isEdit
         ? await budgetsApi.updateExpense(year, event.id, expense.id, payload)
         : await budgetsApi.createExpense(year, event.id, payload);
+      // The expense itself is saved; the file is a second request
+      try {
+        if (newFile) await budgetsApi.uploadInvoice(year, event.id, data.id, newFile);
+        else if (isEdit && removeStored && expense.invoice_file) await budgetsApi.removeInvoice(year, event.id, data.id);
+      } catch (err) {
+        alert(`ההוצאה נשמרה, אך ${newFile ? 'העלאת' : 'הסרת'} קובץ החשבונית נכשלה: ${apiErrorMessage(err)}`);
+      }
       onSaved(data, isEdit);
       onClose();
     } catch (err) {
@@ -163,16 +200,71 @@ export default function ExpenseModal({ year, event, expense, onClose, onSaved })
           </div>
         </div>
 
+        <div className="col-span-2">
+          <span className="block text-sm font-medium text-gray-700 mb-1.5">קובץ חשבונית</span>
+          {newFile || storedFile ? (
+            <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5">
+              {(newFile?.type || storedFile?.content_type || '').startsWith('image/') ? (
+                <ImageIcon className="h-5 w-5 text-amber-600 flex-shrink-0" />
+              ) : (
+                <FileText className="h-5 w-5 text-amber-600 flex-shrink-0" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-gray-800 truncate" dir="auto" title={newFile?.name ?? storedFile.file_name}>
+                  {newFile?.name ?? storedFile.file_name}
+                </p>
+                <p className="text-xs text-gray-400">
+                  {formatFileSize(newFile?.size ?? storedFile.size)}
+                  {newFile ? ' · יועלה בשמירה' : ''}
+                </p>
+              </div>
+              {!newFile && (
+                <button type="button" onClick={viewStored} className="p-1.5 rounded-lg text-gray-500 hover:text-amber-700 hover:bg-white" title="צפייה בקובץ">
+                  <Eye className="h-4 w-4" />
+                </button>
+              )}
+              <button type="button" onClick={() => fileInput.current?.click()} className="text-xs text-amber-700 hover:underline px-1">
+                החלפה
+              </button>
+              <button
+                type="button"
+                onClick={() => { setNewFile(null); if (storedFile && !newFile) setRemoveStored(true); }}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-white"
+                title={newFile ? 'ביטול הבחירה' : 'הסרת הקובץ'}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-200 px-3 py-3 text-sm text-gray-500 hover:border-amber-300 hover:text-amber-700 hover:bg-amber-50/40 transition-colors"
+            >
+              <Upload className="h-4 w-4" />
+              בחירת קובץ מהמחשב (PDF, PNG, JPG · עד 5MB)
+            </button>
+          )}
+          <input ref={fileInput} type="file" accept={INVOICE_ACCEPT} onChange={pickFile} className="hidden" />
+          {removeStored && !newFile && (
+            <span className="block text-xs text-gray-500 mt-1">
+              הקובץ יוסר בשמירה.{' '}
+              <button type="button" className="text-amber-700 hover:underline" onClick={() => setRemoveStored(false)}>ביטול</button>
+            </span>
+          )}
+          {fileError && <span className="block text-xs text-red-600 mt-1">{fileError}</span>}
+        </div>
+
         <label className="col-span-2 block">
-          <span className="block text-sm font-medium text-gray-700 mb-1.5">אסמכתת חשבונית</span>
+          <span className="block text-sm font-medium text-gray-700 mb-1.5">מס׳ חשבונית / אסמכתא</span>
           <input
             value={form.invoice_reference}
             onChange={set('invoice_reference')}
             className={amberInput}
-            placeholder="מס׳ חשבונית, שם קובץ או קישור לקובץ (https://...)"
+            placeholder="מס׳ חשבונית או קישור (אופציונלי)"
           />
-          {form.status === PAID && !form.invoice_reference.trim() && (
-            <span className="block text-xs text-amber-700 mt-1">ההוצאה שולמה — מומלץ לצרף אסמכתת חשבונית</span>
+          {form.status === PAID && !hasInvoice && (
+            <span className="block text-xs text-amber-700 mt-1">ההוצאה שולמה — מומלץ לצרף את קובץ החשבונית</span>
           )}
         </label>
 

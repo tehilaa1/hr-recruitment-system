@@ -63,6 +63,17 @@ export const budgetsApi = {
   updateExpense: (year, eventId, id, data) =>
     http.patch(`/api/budgets/${year}/events/${eventId}/expenses/${id}`, data),
   removeExpense: (year, eventId, id) => http.delete(`/api/budgets/${year}/events/${eventId}/expenses/${id}`),
+  /* Invoice file (PDF/PNG/JPG) of an expense */
+  uploadInvoice: (year, eventId, id, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return http.put(`/api/budgets/${year}/events/${eventId}/expenses/${id}/invoice`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  getInvoice: (year, eventId, id) =>
+    http.get(`/api/budgets/${year}/events/${eventId}/expenses/${id}/invoice`, { responseType: 'blob' }),
+  removeInvoice: (year, eventId, id) => http.delete(`/api/budgets/${year}/events/${eventId}/expenses/${id}/invoice`),
   exportExpenses: (year, eventId) =>
     http.get(`/api/budgets/${year}/events/${eventId}/export-excel`, { responseType: 'blob' }),
 };
@@ -156,6 +167,26 @@ export function saveDownload(res, fallbackName) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+/* Open a protected file (fetched with the auth token) in a new tab.
+   The tab is opened before the request so popup blockers allow it;
+   if it was blocked anyway, the file is downloaded instead. */
+export async function openFileInNewTab(request, fallbackName) {
+  const tab = window.open('', '_blank');
+  try {
+    const res = await request();
+    if (!tab || tab.closed) {
+      saveDownload(res, fallbackName);
+      return;
+    }
+    const url = URL.createObjectURL(res.data);
+    tab.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    tab?.close();
+    throw err;
+  }
 }
 
 export const candidatesApi = {

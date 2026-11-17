@@ -1,11 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, ExternalLink, FileText, Loader2, Paperclip, Pencil, Plus, ReceiptText, RefreshCw, Trash2, X } from 'lucide-react';
-import { apiErrorMessage, budgetsApi, saveDownload } from '../../api/client';
-import { EXPENSE_STATUSES, EXPENSE_STATUS_STYLES, formatIls } from '../../constants/budgets';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Download,
+  ExternalLink,
+  FileText,
+  Image as ImageIcon,
+  Loader2,
+  Paperclip,
+  Pencil,
+  Plus,
+  ReceiptText,
+  RefreshCw,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { apiErrorMessage, budgetsApi, openFileInNewTab, saveDownload } from '../../api/client';
+import {
+  EXPENSE_STATUSES,
+  EXPENSE_STATUS_STYLES,
+  INVOICE_ACCEPT,
+  formatFileSize,
+  formatIls,
+  invoiceFileError,
+} from '../../constants/budgets';
 import ExpenseModal from './ExpenseModal';
 
 const PAID = EXPENSE_STATUSES[0];
-const isLink = (ref) => /^https?:\/\//i.test(ref || '');
 const fmtQty = (q) => new Intl.NumberFormat('he-IL', { maximumFractionDigits: 3 }).format(Number(q) || 0);
 
 function ExpenseStatusBadge({ status }) {
@@ -16,38 +35,88 @@ function ExpenseStatusBadge({ status }) {
   );
 }
 
-function InvoiceCell({ expense, onAttach }) {
+/* Uploaded file (view in a new tab), else a text reference, else a direct "attach file" picker */
+function InvoiceCell({ year, eventId, expense, onUploaded }) {
+  const input = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const file = expense.invoice_file;
   const ref = expense.invoice_reference;
-  if (ref) {
-    return isLink(ref) ? (
-      <a
-        href={ref}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
-        title={ref}
-      >
-        <ExternalLink className="h-3.5 w-3.5" /> צפייה בחשבונית
+
+  const view = async () => {
+    setBusy(true);
+    try {
+      await openFileInNewTab(() => budgetsApi.getInvoice(year, eventId, expense.id), file.file_name);
+    } catch (err) {
+      alert(apiErrorMessage(err, 'שגיאה בפתיחת הקובץ'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const upload = async (e) => {
+    const picked = e.target.files?.[0];
+    e.target.value = '';
+    if (!picked) return;
+    const problem = invoiceFileError(picked);
+    if (problem) { alert(problem); return; }
+    setBusy(true);
+    try {
+      await budgetsApi.uploadInvoice(year, eventId, expense.id, picked);
+      onUploaded();
+    } catch (err) {
+      alert(apiErrorMessage(err, 'שגיאה בהעלאת הקובץ'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reference = ref ? (
+    /^https?:\/\//i.test(ref) ? (
+      <a href={ref} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline" title={ref}>
+        <ExternalLink className="h-3 w-3" /> קישור
       </a>
     ) : (
-      <span className="inline-flex items-center gap-1 text-xs text-gray-700 max-w-[180px]" title={ref}>
-        <FileText className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
-        <span className="truncate">{ref}</span>
-      </span>
+      <span className="block text-[11px] text-gray-500 truncate max-w-[160px]" title={ref}>{ref}</span>
+    )
+  ) : null;
+
+  if (file) {
+    const Icon = file.content_type?.startsWith('image/') ? ImageIcon : FileText;
+    return (
+      <div className="leading-tight">
+        <button
+          type="button"
+          onClick={view}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:underline disabled:opacity-60 max-w-[180px]"
+          title={`${file.file_name} (${formatFileSize(file.size)}) – פתיחה בלשונית חדשה`}
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" /> : <Icon className="h-3.5 w-3.5 flex-shrink-0" />}
+          <span className="truncate" dir="auto">{file.file_name}</span>
+        </button>
+        {reference}
+      </div>
     );
   }
+
   const missing = expense.status === PAID;
   return (
-    <button
-      type="button"
-      onClick={onAttach}
-      className={`inline-flex items-center gap-1 text-xs rounded-md px-1.5 py-0.5 ${
-        missing ? 'text-amber-700 bg-amber-50 hover:bg-amber-100' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
-      }`}
-      title="הוספת מס׳ חשבונית, שם קובץ או קישור"
-    >
-      <Paperclip className="h-3.5 w-3.5" /> {missing ? 'חסרה אסמכתא' : 'צירוף'}
-    </button>
+    <div className="leading-tight">
+      <button
+        type="button"
+        onClick={() => input.current?.click()}
+        disabled={busy}
+        className={`inline-flex items-center gap-1 text-xs rounded-md px-1.5 py-0.5 disabled:opacity-60 ${
+          missing ? 'text-amber-700 bg-amber-50 hover:bg-amber-100' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+        }`}
+        title="העלאת קובץ חשבונית (PDF, PNG, JPG · עד 5MB)"
+      >
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+        {missing && !ref ? 'חסרה חשבונית' : 'צירוף קובץ'}
+      </button>
+      <input ref={input} type="file" accept={INVOICE_ACCEPT} onChange={upload} className="hidden" />
+      {reference}
+    </div>
   );
 }
 
@@ -183,7 +252,7 @@ export default function EventExpenses({ year, event, onChanged, onClose }) {
                   </td>
                   <td className="px-4 py-3 tabular-nums whitespace-nowrap font-medium">{formatIls(x.total_price)}</td>
                   <td className="px-4 py-3"><ExpenseStatusBadge status={x.status} /></td>
-                  <td className="px-4 py-3 whitespace-nowrap"><InvoiceCell expense={x} onAttach={() => setModal(x)} /></td>
+                  <td className="px-4 py-3 whitespace-nowrap"><InvoiceCell year={year} eventId={event.id} expense={x} onUploaded={load} /></td>
                   <td className="px-4 py-3 text-gray-500 max-w-[220px] truncate" title={x.notes}>
                     {x.notes || <span className="text-gray-300">—</span>}
                   </td>

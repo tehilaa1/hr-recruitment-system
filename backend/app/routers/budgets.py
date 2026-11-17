@@ -3,6 +3,7 @@
     /api/budgets/{year}
     /api/budgets/{year}/events/{event_id}
     /api/budgets/{year}/events/{event_id}/expenses/{expense_id}
+    /api/budgets/{year}/events/{event_id}/expenses/{expense_id}/invoice   (PDF/PNG/JPG file)
     /api/budgets/{year}/events/{event_id}/export-excel
 """
 from __future__ import annotations
@@ -11,7 +12,7 @@ import asyncio
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Path, Response, UploadFile
 from fastapi import status as http_status
 
 from app.dependencies import get_firestore_service
@@ -28,6 +29,7 @@ from app.models.budget import (
     ExpenseCreate,
     ExpenseResponse,
     ExpenseUpdate,
+    INVOICE_MAX_BYTES,
 )
 from app.services.budget_service import (
     enrich_event,
@@ -38,6 +40,7 @@ from app.services.budget_service import (
 )
 from app.services.export_service import XLSX_MEDIA_TYPE, content_disposition, generate_expenses_xlsx
 from app.services.firestore_service import FirestoreService
+from app.services.invoice_service import detect_content_type, inline_disposition, safe_file_name
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +192,64 @@ async def update_event_expense(
 async def delete_event_expense(year: Year, event_id: str, expense_id: str, db: DB):
     if not await asyncio.to_thread(db.delete_event_expense, year, event_id, expense_id):
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
+
+
+_INVOICE_PATH = "/{year}/events/{event_id}/expenses/{expense_id}/invoice"
+_NO_INVOICE = "לא צורף קובץ חשבונית"
+
+
+@router.put(_INVOICE_PATH, response_model=ExpenseResponse)
+async def upload_expense_invoice(
+    year: Year, event_id: str, expense_id: str, db: DB, file: UploadFile = File(...)
+):
+    """Attach (or replace) the expense's invoice: PDF, PNG or JPG up to 5 MB."""
+    data = await file.read(INVOICE_MAX_BYTES + 1)
+    if len(data) > INVOICE_MAX_BYTES:
+        raise HTTPException(
+            http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"הקובץ גדול מדי (עד {INVOICE_MAX_BYTES // (1024 * 1024)}MB)",
+        )
+    if not data:
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "הקובץ ריק")
+    content_type = detect_content_type(data)
+    if content_type is None:
+        raise HTTPException(
+            http_status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "סוג קובץ לא נתמך – PDF, PNG או JPG בלבד"
+        )
+    meta = {
+        "file_name": safe_file_name(file.filename, content_type),
+        "content_type": content_type,
+        "size": len(data),
+    }
+    saved = await asyncio.to_thread(db.set_expense_invoice, year, event_id, expense_id, meta, data)
+    if saved is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
+    return saved
+
+
+@router.get(_INVOICE_PATH)
+async def get_expense_invoice(year: Year, event_id: str, expense_id: str, db: DB):
+    found = await asyncio.to_thread(db.get_expense_invoice, year, event_id, expense_id)
+    if found is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, _NO_INVOICE)
+    meta, data = found
+    return Response(
+        content=data,
+        media_type=meta["content_type"],
+        headers={
+            "Content-Disposition": inline_disposition(meta.get("file_name") or "invoice"),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.delete(_INVOICE_PATH, response_model=ExpenseResponse)
+async def delete_expense_invoice(year: Year, event_id: str, expense_id: str, db: DB):
+    saved = await asyncio.to_thread(db.delete_expense_invoice, year, event_id, expense_id)
+    if saved is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
+    return saved
 
 
 @router.get("/{year}/events/{event_id}/export-excel")

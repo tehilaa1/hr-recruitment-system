@@ -105,7 +105,8 @@ Key architectural points:
 - **Excel export (privacy-filtered):** name, phone, company email, birth date, expected return date, attendance-updated and notes only. The gift address and delivery contact (name + phone) are **never exported**; the columns are an explicit allow-list in `export_service.py`, checked by `tests/test_exports.py`.
 
 ### Annual budget: holiday expenses (`/budgets`)
-- Click a holiday / event to open its **itemized expenses**: item or supplier, quantity, unit price, total (auto-calculated from quantity × unit price, or entered directly), payment status (**שולם** / **ישולם בהעברה**), notes, and an **invoice reference** (invoice number, file name or a link to the file).
+- Click a holiday / event to open its **itemized expenses**: item or supplier, quantity, unit price, total (auto-calculated from quantity × unit price, or entered directly), payment status (**שולם** / **ישולם בהעברה**), notes, an optional invoice number / link, and an **uploaded invoice file**.
+- **Invoice files (PDF, PNG, JPG, up to 5 MB):** picked from the computer in the expense form, or attached straight from the table row; opened in a new browser tab. Files are stored in Firestore itself (no Storage bucket needed): raw bytes split into ~900 KB chunk documents under `.../expenses/{id}/invoice_chunks`, so the expenses list never downloads them. The real type is checked from the file's content, not its name, and files are deleted along with their expense, holiday or year.
 - Once a holiday has expense items, its *actual spent* is their sum (kept in sync by the backend on every change).
 - **Excel export** per holiday: RTL sheet with a title, the items, and totals (total, paid, pending, allocated budget, remaining).
 
@@ -193,6 +194,7 @@ Interactive docs are served at **`/docs`** (Swagger) and **`/redoc`** when the b
 | GET | `/api/maternity/export-excel` | Download records as `.xlsx` (no gift address / delivery contact) |
 | GET / POST | `/api/budgets/{year}/events/{event_id}/expenses` | List / add expense items of a holiday |
 | PATCH / DELETE | `/api/budgets/{year}/events/{event_id}/expenses/{expense_id}` | Update / delete an expense item |
+| PUT / GET / DELETE | `/api/budgets/{year}/events/{event_id}/expenses/{expense_id}/invoice` | Upload (multipart `file`) / view / remove the invoice file |
 | GET | `/api/budgets/{year}/events/{event_id}/export-excel` | Download the holiday's expenses as `.xlsx` |
 
 ---
@@ -370,6 +372,7 @@ python tests/test_roles_sync.py
 python tests/test_maternity_fields_sync.py
 python tests/test_budgets.py
 python tests/test_exports.py
+python tests/test_invoices.py
 ```
 
 - `test_status_sync.py`: the backend `VALID_STATUSES` equals the frontend `RECRUITMENT_STATUSES` (same order), every status has a badge style, and unknown statuses are rejected.

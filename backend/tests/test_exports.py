@@ -54,7 +54,9 @@ def _all_values(ws) -> list:
 def test_maternity_export_excludes_private_fields():
     ws = _sheet(generate_maternity_xlsx([_MATERNITY_RECORD]))
     headers = [c.value for c in ws[1]]
-    assert headers == ["שם העובדת", "טלפון", "מייל בחברה", "תאריך לידה", "תאריך חזרה לעבודה", "עודכן בנוכחות", "הערות"]
+    # Column A is the first one; the sheet is right-to-left, so A is the right-most
+    assert headers == ["שם העובדת", "טלפון", "מייל חברה", "תאריך לידה", "תאריך חזרה לעבודה", "עודכן בנוכחות", "הערות"]
+    assert [c.column_letter for c in ws[1]] == list("ABCDEFG")
     values = [str(v) for v in _all_values(ws)]
     for field in MATERNITY_EXCLUDED_FIELDS:
         assert _MATERNITY_RECORD[field] not in values, field
@@ -72,7 +74,9 @@ def test_maternity_export_columns_are_real_fields_and_values_are_typed():
     assert ws.sheet_view.rightToLeft is True and ws.freeze_panes == "A2"
     row = [c.value for c in ws[2]]
     assert row[1] == "050-1234567"  # text: leading 0 kept
-    assert row[3].date() == date(2026, 3, 1) and ws.cell(2, 4).number_format == "DD/MM/YYYY"
+    assert row[3].date() == date(2026, 3, 1) and row[4].date() == date(2026, 6, 14)
+    for col in (4, 5):  # native Excel dates with a locale-safe format code
+        assert ws.cell(2, col).is_date and ws.cell(2, col).number_format == "dd/mm/yyyy"
     assert row[5] == "כן"
     legacy = [c.value for c in ws[3]]
     assert legacy[5] == "לא" and legacy[3] in (None, "")

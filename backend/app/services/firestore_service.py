@@ -9,6 +9,7 @@ from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.services.budget_service import summarize_expenses
+from app.services.invoice_service import split_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -292,9 +293,69 @@ class FirestoreService:
         ref = event_ref.collection("expenses").document(expense_id)
         if not ref.get().exists:
             return False
+        self._delete_invoice_chunks(ref)
         ref.delete()
         self._sync_event_spent(event_ref)
         return True
+
+    # Uploaded invoice file of an expense: metadata in the expense's invoice_file
+    # field, raw bytes in .../invoice_chunks/{0000, 0001, ...}
+
+    def _expense_ref(self, year: int, event_id: str, expense_id: str):
+        return self._event_ref(year, event_id).collection("expenses").document(expense_id)
+
+    def set_expense_invoice(
+        self, year: int, event_id: str, expense_id: str, meta: dict, data: bytes
+    ) -> Optional[dict]:
+        """Store (or replace) the invoice in one atomic batch. None if the expense doesn't exist."""
+        ref = self._expense_ref(year, event_id, expense_id)
+        if not ref.get().exists:
+            return None
+        chunks = split_chunks(data)
+        chunks_col = ref.collection("invoice_chunks")
+        batch = self._db.batch()
+        # Same ids are overwritten by set(); only leftovers of a longer old file are deleted
+        for old in chunks_col.list_documents():  # references only, no file bytes
+            if not old.id.isdigit() or int(old.id) >= len(chunks):
+                batch.delete(old)
+        for i, part in enumerate(chunks):
+            batch.set(chunks_col.document(f"{i:04d}"), {"index": i, "data": part})
+        now = datetime.now(timezone.utc)
+        batch.update(ref, {"invoice_file": {**meta, "uploaded_at": now}, "updated_at": now})
+        batch.commit()
+        return {"id": expense_id, **ref.get().to_dict()}
+
+    def get_expense_invoice(
+        self, year: int, event_id: str, expense_id: str
+    ) -> Optional[tuple[dict, bytes]]:
+        """(metadata, bytes), or None if the expense or its file doesn't exist."""
+        ref = self._expense_ref(year, event_id, expense_id)
+        doc = ref.get()
+        meta = (doc.to_dict() or {}).get("invoice_file") if doc.exists else None
+        if not isinstance(meta, dict):
+            return None
+        parts = sorted(
+            (d.to_dict() or {} for d in ref.collection("invoice_chunks").stream()),
+            key=lambda c: int(c.get("index") or 0),
+        )
+        data = b"".join(bytes(c.get("data") or b"") for c in parts)
+        if len(data) != meta.get("size"):
+            logger.error("Invoice of expense %s is incomplete (%s of %s bytes)", expense_id, len(data), meta.get("size"))
+            return None
+        return meta, data
+
+    def delete_expense_invoice(self, year: int, event_id: str, expense_id: str) -> Optional[dict]:
+        ref = self._expense_ref(year, event_id, expense_id)
+        if not ref.get().exists:
+            return None
+        self._delete_invoice_chunks(ref)
+        ref.update({"invoice_file": None, "updated_at": datetime.now(timezone.utc)})
+        return {"id": expense_id, **ref.get().to_dict()}
+
+    @staticmethod
+    def _delete_invoice_chunks(expense_ref) -> None:
+        for chunk in expense_ref.collection("invoice_chunks").list_documents():
+            chunk.delete()
 
     def _sync_event_spent(self, event_ref) -> None:
         expenses = [d.to_dict() or {} for d in event_ref.collection("expenses").stream()]
@@ -308,6 +369,7 @@ class FirestoreService:
     @staticmethod
     def _delete_expenses(event_ref) -> None:
         for expense in event_ref.collection("expenses").stream():
+            FirestoreService._delete_invoice_chunks(expense.reference)
             expense.reference.delete()
 
     # ------------------------------------------------------------------ #
