@@ -1,14 +1,17 @@
-"""Annual budget module: /api/budgets/{year} and /api/budgets/{year}/events/{event_id}.
+"""Annual budget module.
 
-Future itemized expenses per event belong under
-/api/budgets/{year}/events/{event_id}/expenses (see app/models/budget.py).
+    /api/budgets/{year}
+    /api/budgets/{year}/events/{event_id}
+    /api/budgets/{year}/events/{event_id}/expenses/{expense_id}
+    /api/budgets/{year}/events/{event_id}/export-excel
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Response
 from fastapi import status as http_status
 
 from app.dependencies import get_firestore_service
@@ -22,9 +25,21 @@ from app.models.budget import (
     BudgetEventCreate,
     BudgetEventResponse,
     BudgetEventUpdate,
+    ExpenseCreate,
+    ExpenseResponse,
+    ExpenseUpdate,
 )
-from app.services.budget_service import enrich_event, sort_events, summarize_year
+from app.services.budget_service import (
+    enrich_event,
+    sort_events,
+    sort_expenses,
+    summarize_expenses,
+    summarize_year,
+)
+from app.services.export_service import XLSX_MEDIA_TYPE, content_disposition, generate_expenses_xlsx
 from app.services.firestore_service import FirestoreService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/budgets", tags=["Annual Budgets"])
 
@@ -106,9 +121,14 @@ async def update_budget_event(year: Year, event_id: str, payload: BudgetEventUpd
     update = payload.model_dump(mode="json", exclude_unset=True)
     if not update:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
-    for field in ("name", "allocated_budget", "actual_spent", "status", "notes"):
-        if field in update and update[field] is None:
-            raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} cannot be null")
+    _reject_nulls(update, ("name", "allocated_budget", "actual_spent", "status", "notes"))
+    if "actual_spent" in update:
+        # With itemized expenses, actual_spent is derived from them and can't be set by hand
+        event = await asyncio.to_thread(db.get_budget_event, year, event_id)
+        if event and int(event.get("expenses_count") or 0) > 0:
+            update.pop("actual_spent")
+    if not update:
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
     saved = await asyncio.to_thread(db.update_budget_event, year, event_id, update)
     if saved is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "האירוע לא נמצא")
@@ -119,6 +139,81 @@ async def update_budget_event(year: Year, event_id: str, payload: BudgetEventUpd
 async def delete_budget_event(year: Year, event_id: str, db: DB):
     if not await asyncio.to_thread(db.delete_budget_event, year, event_id):
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "האירוע לא נמצא")
+
+
+# ------------------------------------------------------------------ #
+# Itemized expenses under an event                                     #
+# ------------------------------------------------------------------ #
+
+_EXPENSE_NOT_FOUND = "פריט ההוצאה לא נמצא"
+
+
+@router.get("/{year}/events/{event_id}/expenses", response_model=list[ExpenseResponse])
+async def list_event_expenses(year: Year, event_id: str, db: DB):
+    event, expenses = await asyncio.gather(
+        asyncio.to_thread(db.get_budget_event, year, event_id),
+        asyncio.to_thread(db.list_event_expenses, year, event_id),
+    )
+    _assert_event(event)
+    return sort_expenses(expenses)
+
+
+@router.post(
+    "/{year}/events/{event_id}/expenses",
+    response_model=ExpenseResponse,
+    status_code=http_status.HTTP_201_CREATED,
+)
+async def create_event_expense(year: Year, event_id: str, payload: ExpenseCreate, db: DB):
+    saved = await asyncio.to_thread(db.create_event_expense, year, event_id, payload.model_dump())
+    _assert_event(saved)
+    return saved
+
+
+@router.patch("/{year}/events/{event_id}/expenses/{expense_id}", response_model=ExpenseResponse)
+async def update_event_expense(
+    year: Year, event_id: str, expense_id: str, payload: ExpenseUpdate, db: DB
+):
+    update = payload.model_dump(exclude_unset=True)
+    _reject_nulls(update, ("item_name", "quantity", "total_price", "status", "notes", "invoice_reference"))
+    if not update:
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
+    saved = await asyncio.to_thread(db.update_event_expense, year, event_id, expense_id, update)
+    if saved is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
+    return saved
+
+
+@router.delete(
+    "/{year}/events/{event_id}/expenses/{expense_id}", status_code=http_status.HTTP_204_NO_CONTENT
+)
+async def delete_event_expense(year: Year, event_id: str, expense_id: str, db: DB):
+    if not await asyncio.to_thread(db.delete_event_expense, year, event_id, expense_id):
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
+
+
+@router.get("/{year}/events/{event_id}/export-excel")
+async def export_event_expenses_excel(year: Year, event_id: str, db: DB):
+    event, expenses = await asyncio.gather(
+        asyncio.to_thread(db.get_budget_event, year, event_id),
+        asyncio.to_thread(db.list_event_expenses, year, event_id),
+    )
+    _assert_event(event)
+    event = enrich_event(event, year)
+    try:
+        expenses = sort_expenses(expenses)
+        xlsx_bytes = await asyncio.to_thread(
+            generate_expenses_xlsx, event, expenses, summarize_expenses(expenses)
+        )
+    except Exception:
+        logger.exception("Expenses Excel export failed for %s/%s", year, event_id)
+        raise HTTPException(
+            http_status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to generate Excel export"
+        )
+    return Response(
+        content=xlsx_bytes,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": content_disposition("expenses", f"{event['name']}_{year}")},
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -136,3 +231,14 @@ def _detail(budget: dict, events: list[dict]) -> dict:
 def _assert_year(budget, year: int) -> None:
     if budget is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"לא נמצא תקציב לשנת {year}")
+
+
+def _assert_event(event) -> None:
+    if event is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "האירוע לא נמצא")
+
+
+def _reject_nulls(update: dict, fields: tuple[str, ...]) -> None:
+    for field in fields:
+        if field in update and update[field] is None:
+            raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} cannot be null")

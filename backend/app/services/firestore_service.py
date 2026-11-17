@@ -8,6 +8,8 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
+from app.services.budget_service import summarize_expenses
+
 logger = logging.getLogger(__name__)
 
 
@@ -218,9 +220,17 @@ class FirestoreService:
         if not ref.get().exists:
             return False
         for event in ref.collection("events").stream():
+            self._delete_expenses(event.reference)
             event.reference.delete()
         ref.delete()
         return True
+
+    def _event_ref(self, year: int, event_id: str):
+        return self._budget_ref(year).collection("events").document(event_id)
+
+    def get_budget_event(self, year: int, event_id: str) -> Optional[dict]:
+        doc = self._event_ref(year, event_id).get()
+        return {"id": doc.id, **doc.to_dict()} if doc.exists else None
 
     def list_budget_events(self, year: int) -> list[dict]:
         return [{"id": d.id, **d.to_dict()} for d in self._budget_ref(year).collection("events").stream()]
@@ -233,18 +243,72 @@ class FirestoreService:
         return {"id": ref.id, **data}
 
     def update_budget_event(self, year: int, event_id: str, data: dict) -> Optional[dict]:
-        ref = self._budget_ref(year).collection("events").document(event_id)
+        ref = self._event_ref(year, event_id)
         if not ref.get().exists:
             return None
         ref.update({**data, "updated_at": datetime.now(timezone.utc)})
         return {"id": event_id, **ref.get().to_dict()}
 
     def delete_budget_event(self, year: int, event_id: str) -> bool:
-        ref = self._budget_ref(year).collection("events").document(event_id)
+        ref = self._event_ref(year, event_id)
+        if not ref.get().exists:
+            return False
+        self._delete_expenses(ref)
+        ref.delete()
+        return True
+
+    # Itemized expenses: annual_budgets/{year}/events/{event_id}/expenses/{id}.
+    # Every write re-derives the event's actual_spent and expenses_count.
+
+    def list_event_expenses(self, year: int, event_id: str) -> list[dict]:
+        docs = self._event_ref(year, event_id).collection("expenses").stream()
+        return [{"id": d.id, **d.to_dict()} for d in docs]
+
+    def create_event_expense(self, year: int, event_id: str, data: dict) -> Optional[dict]:
+        """None if the event doesn't exist."""
+        event_ref = self._event_ref(year, event_id)
+        if not event_ref.get().exists:
+            return None
+        now = datetime.now(timezone.utc)
+        data = {**data, "created_at": now, "updated_at": now}
+        ref = event_ref.collection("expenses").document()
+        ref.set(data)
+        self._sync_event_spent(event_ref)
+        return {"id": ref.id, **data}
+
+    def update_event_expense(
+        self, year: int, event_id: str, expense_id: str, data: dict
+    ) -> Optional[dict]:
+        event_ref = self._event_ref(year, event_id)
+        ref = event_ref.collection("expenses").document(expense_id)
+        if not ref.get().exists:
+            return None
+        ref.update({**data, "updated_at": datetime.now(timezone.utc)})
+        self._sync_event_spent(event_ref)
+        return {"id": expense_id, **ref.get().to_dict()}
+
+    def delete_event_expense(self, year: int, event_id: str, expense_id: str) -> bool:
+        event_ref = self._event_ref(year, event_id)
+        ref = event_ref.collection("expenses").document(expense_id)
         if not ref.get().exists:
             return False
         ref.delete()
+        self._sync_event_spent(event_ref)
         return True
+
+    def _sync_event_spent(self, event_ref) -> None:
+        expenses = [d.to_dict() or {} for d in event_ref.collection("expenses").stream()]
+        summary = summarize_expenses(expenses)
+        event_ref.update({
+            "actual_spent": summary["total"],
+            "expenses_count": summary["count"],
+            "updated_at": datetime.now(timezone.utc),
+        })
+
+    @staticmethod
+    def _delete_expenses(event_ref) -> None:
+        for expense in event_ref.collection("expenses").stream():
+            expense.reference.delete()
 
     # ------------------------------------------------------------------ #
     # Maternity leaves                                                     #

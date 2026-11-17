@@ -9,6 +9,8 @@ const toNumber = (v) => (v === '' || v === null || v === undefined ? 0 : Number(
 /* Add (event = null) or edit a holiday / event under a year's budget */
 export default function BudgetEventModal({ year, event, existingNames = [], onClose, onSaved }) {
   const isEdit = Boolean(event);
+  // With itemized expenses, "actual spent" is their sum and is managed in the expenses table
+  const spentFromItems = (event?.expenses_count ?? 0) > 0;
   const [form, setForm] = useState(() => ({
     name: event?.name ?? '',
     event_date: event?.event_date ?? '',
@@ -39,7 +41,7 @@ export default function BudgetEventModal({ year, event, existingNames = [], onCl
       event_date: form.event_date || null,
       status: form.status,
       allocated_budget: allocated,
-      actual_spent: spent,
+      ...(spentFromItems ? {} : { actual_spent: spent }),
       notes: form.notes.trim(),
     };
     setSaving(true);
@@ -110,7 +112,14 @@ export default function BudgetEventModal({ year, event, existingNames = [], onCl
         </label>
         <label className="block">
           <span className="block text-sm font-medium text-gray-700 mb-1.5">הוצאה בפועל</span>
-          <MoneyInput value={form.actual_spent} onChange={set('actual_spent')} />
+          {spentFromItems ? (
+            <>
+              <div className={`${amberInput} bg-gray-50 text-gray-600 tabular-nums`}>{formatIls(spent)}</div>
+              <span className="block text-xs text-gray-400 mt-1">מחושב מ-{event.expenses_count} פריטי הוצאה</span>
+            </>
+          ) : (
+            <MoneyInput value={form.actual_spent} onChange={set('actual_spent')} />
+          )}
         </label>
         <p className={`col-span-2 -mt-1 text-xs ${variance < 0 ? 'text-red-600' : 'text-gray-500'}`}>
           {variance < 0 ? `חריגה של ${formatIls(-variance)} מהתקציב המוקצה` : `יתרה באירוע: ${formatIls(variance)}`}

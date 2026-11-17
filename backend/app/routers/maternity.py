@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi import status as http_status
 
 from app.dependencies import get_firestore_service
@@ -13,7 +15,14 @@ from app.models.maternity import (
     MaternityLeaveUpdate,
     MaternitySettings,
 )
+from app.services.export_service import (
+    XLSX_MEDIA_TYPE,
+    content_disposition,
+    generate_maternity_xlsx,
+)
 from app.services.firestore_service import FirestoreService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/maternity", tags=["Maternity Leave"])
 
@@ -43,6 +52,30 @@ async def update_maternity_settings(payload: MaternitySettings, db: DB):
         data["templates"] = MaternitySettings.model_validate(stored).templates.model_dump()
     await asyncio.to_thread(db.set_settings_doc, _SETTINGS_DOC, data)
     return MaternitySettings.model_validate(data)
+
+
+# ------------------------------------------------------------------ #
+# Excel export (privacy-filtered; see MATERNITY_EXPORT_COLUMNS)        #
+# ------------------------------------------------------------------ #
+
+
+@router.get("/export-excel")
+async def export_maternity_excel(db: DB):
+    """Every record, open ones first. Gift address and delivery contact are never exported."""
+    try:
+        records = await asyncio.to_thread(db.list_maternity_leaves)
+        records.sort(key=lambda r: bool(r.get("is_completed")))  # stable: keeps newest-first
+        xlsx_bytes = await asyncio.to_thread(generate_maternity_xlsx, records)
+    except Exception:
+        logger.exception("Maternity Excel export failed")
+        raise HTTPException(
+            http_status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to generate Excel export"
+        )
+    return Response(
+        content=xlsx_bytes,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": content_disposition("maternity_leaves", date.today().isoformat())},
+    )
 
 
 # ------------------------------------------------------------------ #

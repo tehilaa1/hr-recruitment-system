@@ -15,6 +15,19 @@ export const EVENT_STATUS_STYLES = {
   'בוטל': 'bg-gray-100 text-gray-500 border-gray-200',
 };
 
+// Expense payment status. Must stay identical, in the same order, to
+// EXPENSE_STATUSES in backend/app/models/budget.py (backend/tests/test_budgets.py).
+export const EXPENSE_STATUSES = [
+  'שולם',
+  'ישולם בהעברה',
+];
+export const DEFAULT_EXPENSE_STATUS = 'ישולם בהעברה';
+
+export const EXPENSE_STATUS_STYLES = {
+  'שולם': 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  'ישולם בהעברה': 'bg-orange-50 text-orange-700 border-orange-200',
+};
+
 /* Quick-pick names in the "new event" form */
 export const COMMON_EVENTS = [
   'ראש השנה',

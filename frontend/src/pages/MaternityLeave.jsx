@@ -4,6 +4,7 @@ import {
   CalendarClock,
   CalendarPlus,
   ClipboardX,
+  Download,
   Loader2,
   Pencil,
   Plus,
@@ -13,7 +14,7 @@ import {
   Settings,
   Trash2,
 } from 'lucide-react';
-import { maternityApi } from '../api/client';
+import { apiErrorMessage, maternityApi, saveDownload } from '../api/client';
 import CompleteToggle from '../components/CompleteToggle';
 import Navbar from '../components/Navbar';
 import MaternityActionsModal from '../components/maternity/MaternityActionsModal';
@@ -160,6 +161,7 @@ export default function MaternityLeave() {
   const [error, setError] = useState(false);
   const [filter, setFilter] = useState('');
   const [togglingId, setTogglingId] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const [formRecord, setFormRecord] = useState(undefined); // undefined = closed, null = new
   const [actionsRecord, setActionsRecord] = useState(null);
@@ -193,6 +195,17 @@ export default function MaternityLeave() {
       setRecords((prev) => prev.filter((r) => r.id !== record.id));
     } catch {
       alert('שגיאה במחיקה');
+    }
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      saveDownload(await maternityApi.exportExcel(), 'maternity_leaves.xlsx');
+    } catch (err) {
+      alert(apiErrorMessage(err, 'שגיאה בייצוא לאקסל'));
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -253,7 +266,16 @@ export default function MaternityLeave() {
             <h1 className="text-2xl font-bold text-gray-900">מעקב חופשות לידה</h1>
             <p className="text-sm text-gray-400 mt-1">ניהול עובדים/ות בחופשת לידה ושליחת עדכונים</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={handleExport}
+              disabled={exporting || records.length === 0}
+              title="ייצוא כל הרשומות לאקסל — ללא כתובת למשלוח מתנה ופרטי איש קשר למשלוח"
+              className="flex items-center gap-2 border border-gray-200 text-gray-600 hover:bg-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              ייצוא Excel
+            </button>
             <button
               onClick={() => setSettingsTab('recipients')}
               className="flex items-center gap-2 border border-gray-200 text-gray-600 hover:bg-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"

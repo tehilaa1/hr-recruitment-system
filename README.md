@@ -102,6 +102,12 @@ Key architectural points:
 - **"שליחת עדכונים" (Send updates) per employee:**
   - **Outlook summary email:** a structured summary (birth date, return date, contact info, gift address, delivery contact, notes) addressed to the **preset recipient list**, editable in-app and opened as an Outlook draft.
   - **Teams announcement:** an editable congratulations message with *Copy* and *Copy & open channel* (if a channel link is configured).
+- **Excel export (privacy-filtered):** name, phone, company email, birth date, expected return date, attendance-updated and notes only. The gift address and delivery contact (name + phone) are **never exported**; the columns are an explicit allow-list in `export_service.py`, checked by `tests/test_exports.py`.
+
+### Annual budget: holiday expenses (`/budgets`)
+- Click a holiday / event to open its **itemized expenses**: item or supplier, quantity, unit price, total (auto-calculated from quantity × unit price, or entered directly), payment status (**שולם** / **ישולם בהעברה**), notes, and an **invoice reference** (invoice number, file name or a link to the file).
+- Once a holiday has expense items, its *actual spent* is their sum (kept in sync by the backend on every change).
+- **Excel export** per holiday: RTL sheet with a title, the items, and totals (total, paid, pending, allocated budget, remaining).
 
 ### 4. Preset settings & persistence
 - Maternity notification settings (**fixed recipient emails** and **Teams channel URL**) are edited from the module's *הגדרות התראות* dialog and persisted in Firestore at `settings/maternity`.
@@ -184,6 +190,10 @@ Interactive docs are served at **`/docs`** (Swagger) and **`/redoc`** when the b
 | GET / POST | `/api/maternity` | List / create maternity records |
 | PATCH / DELETE | `/api/maternity/{record_id}` | Partial update / delete a record |
 | GET / PUT | `/api/maternity/settings` | Read / save notification settings |
+| GET | `/api/maternity/export-excel` | Download records as `.xlsx` (no gift address / delivery contact) |
+| GET / POST | `/api/budgets/{year}/events/{event_id}/expenses` | List / add expense items of a holiday |
+| PATCH / DELETE | `/api/budgets/{year}/events/{event_id}/expenses/{expense_id}` | Update / delete an expense item |
+| GET | `/api/budgets/{year}/events/{event_id}/export-excel` | Download the holiday's expenses as `.xlsx` |
 
 ---
 
@@ -358,6 +368,8 @@ cd backend
 python tests/test_status_sync.py              # or: python -m pytest tests/  (requires pytest)
 python tests/test_roles_sync.py
 python tests/test_maternity_fields_sync.py
+python tests/test_budgets.py
+python tests/test_exports.py
 ```
 
 - `test_status_sync.py`: the backend `VALID_STATUSES` equals the frontend `RECRUITMENT_STATUSES` (same order), every status has a badge style, and unknown statuses are rejected.

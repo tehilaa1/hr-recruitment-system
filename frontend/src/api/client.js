@@ -57,6 +57,14 @@ export const budgetsApi = {
   createEvent: (year, data) => http.post(`/api/budgets/${year}/events`, data),
   updateEvent: (year, id, data) => http.patch(`/api/budgets/${year}/events/${id}`, data),
   removeEvent: (year, id) => http.delete(`/api/budgets/${year}/events/${id}`),
+  /* Itemized expenses of one holiday / event */
+  listExpenses: (year, eventId) => http.get(`/api/budgets/${year}/events/${eventId}/expenses`),
+  createExpense: (year, eventId, data) => http.post(`/api/budgets/${year}/events/${eventId}/expenses`, data),
+  updateExpense: (year, eventId, id, data) =>
+    http.patch(`/api/budgets/${year}/events/${eventId}/expenses/${id}`, data),
+  removeExpense: (year, eventId, id) => http.delete(`/api/budgets/${year}/events/${eventId}/expenses/${id}`),
+  exportExpenses: (year, eventId) =>
+    http.get(`/api/budgets/${year}/events/${eventId}/export-excel`, { responseType: 'blob' }),
 };
 
 export const usersApi = {
@@ -110,6 +118,8 @@ export const maternityApi = {
   remove: (id) => http.delete(`/api/maternity/${id}`),
   getSettings: () => http.get('/api/maternity/settings'),
   saveSettings: (data) => http.put('/api/maternity/settings', data),
+  /* Privacy-filtered: no gift address / delivery contact */
+  exportExcel: () => http.get('/api/maternity/export-excel', { responseType: 'blob' }),
 };
 
 /* Turn a FastAPI error response into a readable message */
@@ -133,6 +143,19 @@ export function filenameFromDisposition(header, fallback) {
   if (utf8) return decodeURIComponent(utf8[1]);
   const plain = header.match(/filename="?([^";]+)"?/i);
   return plain ? plain[1] : fallback;
+}
+
+/* Save a blob response (e.g. an Excel export) using the server's filename */
+export function saveDownload(res, fallbackName) {
+  const filename = filenameFromDisposition(res.headers['content-disposition'], fallbackName);
+  const url = URL.createObjectURL(res.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export const candidatesApi = {

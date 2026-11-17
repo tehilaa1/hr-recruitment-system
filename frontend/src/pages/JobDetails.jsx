@@ -11,7 +11,7 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
-import { candidatesApi, filenameFromDisposition, jobsApi } from '../api/client';
+import { candidatesApi, jobsApi, saveDownload } from '../api/client';
 import CandidateFormModal from '../components/CandidateFormModal';
 import CandidatesTable from '../components/CandidatesTable';
 import Navbar from '../components/Navbar';
@@ -215,19 +215,7 @@ export default function JobDetails() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const res = await jobsApi.exportExcel(jobId);
-      const filename = filenameFromDisposition(
-        res.headers['content-disposition'],
-        'candidates.xlsx'
-      );
-      const url = URL.createObjectURL(res.data);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      saveDownload(await jobsApi.exportExcel(jobId), 'candidates.xlsx');
     } catch {
       alert('שגיאה בייצוא לאקסל');
     } finally {

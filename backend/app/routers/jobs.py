@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Annotated
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi import status as http_status
@@ -12,7 +11,7 @@ from app.dependencies import get_firestore_service, get_gemini_service
 from app.models.job import JobCreate, JobResponse, JobUpdate
 from app.models.talent_pool import PoolMatch
 from app.services.dedup_service import exclude_existing
-from app.services.export_service import generate_xlsx
+from app.services.export_service import XLSX_MEDIA_TYPE, content_disposition, generate_xlsx
 from app.services.firestore_service import FirestoreService
 from app.services.gemini_service import GeminiParseError, GeminiService
 
@@ -122,9 +121,6 @@ async def match_pool_candidates(
 # ------------------------------------------------------------------ #
 
 
-_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-
 @router.get("/{job_id}/export-excel")
 async def export_candidates_excel(job_id: str, db: DB):
     job = await asyncio.to_thread(db.get_job, job_id)
@@ -141,9 +137,11 @@ async def export_candidates_excel(job_id: str, db: DB):
 
     return Response(
         content=xlsx_bytes,
-        media_type=_XLSX_MEDIA_TYPE,
+        media_type=XLSX_MEDIA_TYPE,
         headers={
-            "Content-Disposition": _content_disposition(str(job.get("job_title") or ""))
+            "Content-Disposition": content_disposition(
+                "candidates", str(job.get("job_title") or "") or "job"
+            )
         },
     )
 
@@ -151,21 +149,6 @@ async def export_candidates_excel(job_id: str, db: DB):
 # ------------------------------------------------------------------ #
 # Private                                                              #
 # ------------------------------------------------------------------ #
-
-
-def _content_disposition(job_title: str) -> str:
-    """Build a Content-Disposition header that survives non-ASCII (Hebrew) titles.
-
-    HTTP headers must be latin-1, so the plain ``filename`` gets an ASCII-only
-    fallback while ``filename*`` (RFC 5987) carries the real UTF-8 name.
-    """
-    title = "".join(
-        c if c.isalnum() or c in ("-", "_") else "_" for c in job_title
-    )[:50].strip("_") or "job"
-    utf8_name = f"candidates_{title}.xlsx"
-    ascii_title = "".join(c for c in title if c.isascii()).strip("_") or "job"
-    ascii_name = f"candidates_{ascii_title}.xlsx"
-    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(utf8_name)}"
 
 
 def _assert_job(job, job_id: str) -> None:

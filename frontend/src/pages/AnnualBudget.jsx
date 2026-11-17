@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   CalendarRange,
@@ -8,6 +8,7 @@ import {
   PiggyBank,
   Plus,
   Receipt,
+  ReceiptText,
   RefreshCw,
   Trash2,
   Wallet,
@@ -16,6 +17,7 @@ import { apiErrorMessage, budgetsApi } from '../api/client';
 import Navbar from '../components/Navbar';
 import BudgetEventModal from '../components/budgets/BudgetEventModal';
 import BudgetYearModal from '../components/budgets/BudgetYearModal';
+import EventExpenses from '../components/budgets/EventExpenses';
 import { EventStatusBadge } from '../components/budgets/budgetUi';
 import { formatIls } from '../constants/budgets';
 import { formatIsoDate } from '../constants/maternityColumns';
@@ -73,7 +75,15 @@ export default function AnnualBudget() {
   const [eventModal, setEventModal] = useState(undefined);
 
   const selectedYear = Number(params.get('year')) || null;
+  const selectedEventId = params.get('event');
   const selectYear = (y) => setParams(y ? { year: String(y) } : {}, { replace: true });
+  /* Opens (or closes, when already open) the holiday's itemized expenses */
+  const toggleEvent = (id) =>
+    setParams(
+      id && id !== selectedEventId ? { year: String(selectedYear), event: id } : { year: String(selectedYear) },
+      { replace: true }
+    );
+  const expensesRef = useRef(null);
 
   const loadYears = useCallback(async () => {
     const { data } = await budgetsApi.list();
@@ -160,6 +170,13 @@ export default function AnnualBudget() {
   }, [years]);
 
   const d = detail;
+  const selectedEvent = d?.events.find((e) => e.id === selectedEventId) ?? null;
+
+  useEffect(() => {
+    if (selectedEvent) expensesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Only when a different holiday is opened, not on every refresh of its data
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEvent?.id]);
   const totals = d && {
     allocated: d.allocated_total,
     spent: d.spent_total,
@@ -271,7 +288,9 @@ export default function AnnualBudget() {
                   <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-gray-100">
                     <div>
                       <h2 className="text-base font-bold text-gray-900">חגים ואירועים – {d.year}</h2>
-                      <p className="text-xs text-gray-400 mt-0.5">אירועים בסטטוס ״בוטל״ אינם נספרים בסיכומים</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        לחיצה על אירוע פותחת את פירוט ההוצאות שלו · אירועים בסטטוס ״בוטל״ אינם נספרים בסיכומים
+                      </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -312,12 +331,18 @@ export default function AnnualBudget() {
                             {['חג / אירוע', 'תאריך', 'סטטוס', 'תקציב מוקצה', 'בפועל', 'סטייה', 'הערות'].map((h) => (
                               <th key={h} className="px-4 py-3 text-right font-semibold whitespace-nowrap">{h}</th>
                             ))}
-                            <th className="w-20" />
+                            <th className="w-32" />
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                           {d.events.map((e) => (
-                            <tr key={e.id} className={`group hover:bg-amber-50/30 ${e.status === 'בוטל' ? 'opacity-50' : ''}`}>
+                            <tr
+                              key={e.id}
+                              onClick={() => toggleEvent(e.id)}
+                              className={`group cursor-pointer ${
+                                e.id === selectedEventId ? 'bg-amber-50/70' : 'hover:bg-amber-50/30'
+                              } ${e.status === 'בוטל' ? 'opacity-50' : ''}`}
+                            >
                               <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{e.name}</td>
                               <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{e.event_date ? formatIsoDate(e.event_date) : <span className="text-gray-300">—</span>}</td>
                               <td className="px-4 py-3"><EventStatusBadge status={e.status} /></td>
@@ -325,8 +350,20 @@ export default function AnnualBudget() {
                               <td className="px-4 py-3 tabular-nums whitespace-nowrap">{formatIls(e.actual_spent)}</td>
                               <td className="px-4 py-3 whitespace-nowrap"><Variance value={e.variance} /></td>
                               <td className="px-4 py-3 text-gray-500 max-w-[220px] truncate" title={e.notes}>{e.notes || <span className="text-gray-300">—</span>}</td>
-                              <td className="px-4 py-3">
+                              <td className="px-4 py-3" onClick={(ev) => ev.stopPropagation()}>
                                 <div className="flex items-center gap-1 justify-end">
+                                  <button
+                                    onClick={() => toggleEvent(e.id)}
+                                    className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs whitespace-nowrap ${
+                                      e.id === selectedEventId
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : 'text-gray-500 hover:text-amber-700 hover:bg-amber-50'
+                                    }`}
+                                    title="פירוט הוצאות"
+                                  >
+                                    <ReceiptText className="h-3.5 w-3.5" />
+                                    {e.expenses_count > 0 ? e.expenses_count : 'הוצאות'}
+                                  </button>
                                   <button onClick={() => setEventModal(e)} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100" title="עריכה">
                                     <Pencil className="h-3.5 w-3.5" />
                                   </button>
@@ -355,6 +392,18 @@ export default function AnnualBudget() {
                     </div>
                   )}
                 </div>
+
+                {selectedEvent && (
+                  <div ref={expensesRef} className="scroll-mt-4">
+                    <EventExpenses
+                      key={selectedEvent.id}
+                      year={d.year}
+                      event={selectedEvent}
+                      onChanged={() => refreshDetail().catch(() => {})}
+                      onClose={() => toggleEvent(null)}
+                    />
+                  </div>
+                )}
               </>
             )}
           </>
