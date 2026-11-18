@@ -3,13 +3,26 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
-from app.models.candidate import CandidateBase, CandidateManualBase
+from app.models.candidate import (
+    REFERRER_MAX_LENGTH,
+    CandidateBase,
+    CandidateManualBase,
+    clean_referrer,
+)
 
 
 class TalentPoolCandidateCreate(CandidateManualBase):
     """Manual entry into the talent pool (no CV file)."""
+
+
+class TalentPoolCandidateUpdate(BaseModel):
+    """Fields editable after a pool entry was created."""
+
+    referred_by: Optional[str] = Field(None, max_length=REFERRER_MAX_LENGTH)  # "" clears it
+
+    _referrer = field_validator("referred_by", mode="before")(clean_referrer)
 
 
 class TalentPoolCandidateResponse(CandidateBase):

@@ -93,6 +93,8 @@ Key architectural points:
   - `לשלוח זימון` → **"זימון ב-Outlook"** opens a new calendar event with all interviewers + the candidate as attendees and the interview address in the location and notes. **Date/time are intentionally left empty** for the user to choose.
 - **Excel export:** real `.xlsx` (RTL sheet, styled header, frozen top row), Hebrew filename via RFC 5987 `filename*`, phone numbers stored as text, tolerant of missing/malformed fields.
 - **Global candidate search** (navbar, inside the jobs module): search across **all jobs** by name (either order), email or phone (any format). Records sharing an email/phone are merged into one person. Selecting a result opens a **candidate profile** with contact details and every position applied to, with status and date.
+- **Referred by (הובא על ידי – חבר מביא חבר):** recorded **per application** (and per talent-pool entry), so the same person can be referred to different jobs by different employees. Set it in the manual-add form, once for a whole CV upload batch, or inline in the job / talent-pool tables (autocomplete from names used before). Assigning a pool candidate to a job keeps the pool's referrer. Included in the candidates Excel export.
+- **All candidates (`/candidates`):** every person once — job applications and talent-pool entries merged by normalized email or phone — with filters (source, referrer). The profile shows the full **application history**: job, application date, current status in that job and the referrer of each application. The list is computed on each request from the job candidates and the talent pool (the sources of truth), so there is no second copy that can drift; no top-level `candidates` collection is used, since job candidates are read with a `candidates` collection-group query.
 
 ### 3. Maternity leave tracking (`/maternity`)
 - **Dynamic table** generated from a column config. Initial columns: name, phone, company email, birth date, estimated return date, gift delivery address, delivery contact (name + phone), attendance-updated (yes/no), notes.
@@ -188,6 +190,9 @@ Interactive docs are served at **`/docs`** (Swagger) and **`/redoc`** when the b
 | GET / PATCH / DELETE | `/api/jobs/{job_id}/candidates/{candidate_id}` | Get / update / delete candidate |
 | PATCH | `/api/jobs/{job_id}/candidates/{candidate_id}/status` | Update recruitment status |
 | GET | `/api/candidates/search?q=…&limit=20` | Global search across all jobs (merged profiles) |
+| GET | `/api/candidates` | Every person (applications + talent pool merged), with application history and referrers |
+| GET | `/api/candidates/referrers` | Referrer names used so far, most used first |
+| PATCH | `/api/talent-pool/{candidate_id}` | Update a talent-pool entry (`referred_by`) |
 | GET / POST | `/api/maternity` | List / create maternity records |
 | PATCH / DELETE | `/api/maternity/{record_id}` | Partial update / delete a record |
 | GET / PUT | `/api/maternity/settings` | Read / save notification settings |
@@ -373,6 +378,7 @@ python tests/test_maternity_fields_sync.py
 python tests/test_budgets.py
 python tests/test_exports.py
 python tests/test_invoices.py
+python tests/test_referrals.py
 ```
 
 - `test_status_sync.py`: the backend `VALID_STATUSES` equals the frontend `RECRUITMENT_STATUSES` (same order), every status has a badge style, and unknown statuses are rejected.

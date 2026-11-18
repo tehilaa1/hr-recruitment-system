@@ -39,6 +39,7 @@ CANDIDATE_COLUMNS: tuple[Column, ...] = (
     Column("profession", "מקצוע", 22),
     Column("years_of_experience", "שנות ניסיון", 12, "number"),
     Column("recruitment_status", "סטטוס גיוס", 16),
+    Column("referred_by", "הובא על ידי", 18, "text"),
 )
 
 # Privacy: an explicit allow-list, so fields added to the model later are never

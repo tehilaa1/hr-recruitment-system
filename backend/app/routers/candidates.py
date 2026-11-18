@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi import status as http_status
 
 from app.dependencies import get_firestore_service, get_gemini_service
 from app.models.candidate import (
     DEFAULT_STATUS,
+    REFERRER_MAX_LENGTH,
+    AssignFromPoolRequest,
     CandidateCompletionUpdate,
     CandidateCreate,
     CandidateResponse,
     CandidateStatusUpdate,
     CandidateUpdate,
     CandidateUploadResult,
+    clean_referrer,
 )
 from app.services.cv_ingest_service import describe_duplicate, ingest_cvs
 from app.services.dedup_service import CandidateDeduplicator
@@ -50,8 +53,12 @@ async def upload_candidates(
     db: DB,
     ai: AI,
     files: list[UploadFile] = File(...),
+    referred_by: str = Form("", max_length=REFERRER_MAX_LENGTH),
 ):
-    """Parse every CV in parallel (bounded by GEMINI_MAX_CONCURRENCY), then save."""
+    """Parse every CV in parallel (bounded by GEMINI_MAX_CONCURRENCY), then save.
+
+    `referred_by` (optional) is recorded on every candidate of this batch.
+    """
     await _assert_job(job_id, db)
 
     existing = await asyncio.to_thread(db.list_candidates, job_id)
@@ -61,7 +68,11 @@ async def upload_candidates(
         CandidateDeduplicator(existing),
         save=lambda data: db.create_candidate(job_id, data),
         duplicate_message=_duplicate_message,
-        extra_fields={"recruitment_status": DEFAULT_STATUS, "is_completed": False},
+        extra_fields={
+            "recruitment_status": DEFAULT_STATUS,
+            "is_completed": False,
+            "referred_by": clean_referrer(referred_by),
+        },
     )
     return [CandidateUploadResult(**r) for r in results]
 
@@ -84,8 +95,16 @@ async def create_candidate(job_id: str, payload: CandidateCreate, db: DB):
     response_model=CandidateResponse,
     status_code=http_status.HTTP_201_CREATED,
 )
-async def assign_from_pool(job_id: str, pool_candidate_id: str, db: DB):
-    """Copy a talent-pool candidate into this job (the pool record is kept)."""
+async def assign_from_pool(
+    job_id: str,
+    pool_candidate_id: str,
+    db: DB,
+    payload: Optional[AssignFromPoolRequest] = Body(None),
+):
+    """Copy a talent-pool candidate into this job (the pool record is kept).
+
+    The pool entry's referrer is kept unless the body sets a different one.
+    """
     await _assert_job(job_id, db)
     pooled = await asyncio.to_thread(db.get_pool_candidate, pool_candidate_id)
     if pooled is None:
@@ -98,6 +117,11 @@ async def assign_from_pool(job_id: str, pool_candidate_id: str, db: DB):
         "is_completed": False,
         "file_name": pooled.get("file_name", ""),
         "source_pool_id": pool_candidate_id,
+        "referred_by": (
+            payload.referred_by
+            if payload is not None and payload.referred_by is not None
+            else clean_referrer(pooled.get("referred_by") or "")
+        ),
     }
     return await _create_unless_duplicate(job_id, data, db)
 

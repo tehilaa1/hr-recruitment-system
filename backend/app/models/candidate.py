@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -23,6 +24,16 @@ DEFAULT_STATUS = VALID_STATUSES[0]
 # Literal[...] built from the tuple above, so validation can't drift from it
 RecruitmentStatus = Literal[VALID_STATUSES]  # type: ignore[valid-type]
 
+# "הובא על ידי" — the employee who referred the candidate (חבר מביא חבר).
+# Free text, recorded per application: the same person can be referred to
+# different jobs by different employees.
+REFERRER_MAX_LENGTH = 100
+
+
+def clean_referrer(value):
+    """Trim and collapse inner whitespace, so "  יוסי   לוי " and "יוסי לוי" are one referrer."""
+    return re.sub(r"\s+", " ", value).strip() if isinstance(value, str) else value
+
 
 class CandidateBase(BaseModel):
     full_name: str = ""
@@ -32,6 +43,7 @@ class CandidateBase(BaseModel):
     address: str = ""
     profession: str = ""
     years_of_experience: int = 0
+    referred_by: str = ""
 
 
 class CandidateManualBase(BaseModel):
@@ -44,6 +56,7 @@ class CandidateManualBase(BaseModel):
     address: str = Field("", max_length=300)
     profession: str = Field("", max_length=200)
     years_of_experience: int = Field(0, ge=0, le=70)
+    referred_by: str = Field("", max_length=REFERRER_MAX_LENGTH)
 
     @field_validator(
         "full_name", "family_name", "phone", "email", "address", "profession", mode="before"
@@ -51,6 +64,8 @@ class CandidateManualBase(BaseModel):
     @classmethod
     def _strip(cls, v):
         return v.strip() if isinstance(v, str) else v
+
+    _referrer = field_validator("referred_by", mode="before")(clean_referrer)
 
     @field_validator("full_name")
     @classmethod
@@ -84,6 +99,20 @@ class CandidateUpdate(BaseModel):
     years_of_experience: Optional[int] = None
     recruitment_status: Optional[RecruitmentStatus] = None
     is_completed: Optional[bool] = None
+    referred_by: Optional[str] = Field(None, max_length=REFERRER_MAX_LENGTH)  # "" clears it
+
+    _referrer = field_validator("referred_by", mode="before")(clean_referrer)
+
+
+class AssignFromPoolRequest(BaseModel):
+    """Optional body when copying a talent-pool candidate into a job.
+
+    referred_by None (or no body) keeps the referrer recorded in the pool.
+    """
+
+    referred_by: Optional[str] = Field(None, max_length=REFERRER_MAX_LENGTH)
+
+    _referrer = field_validator("referred_by", mode="before")(clean_referrer)
 
 
 class CandidateResponse(CandidateBase):
@@ -106,6 +135,8 @@ class CandidateApplication(BaseModel):
     interview_type: Optional[str] = None
     interview_location: str = ""
     recruitment_status: str
+    is_completed: bool = False
+    referred_by: str = ""
     file_name: str = ""
     created_at: Optional[datetime] = None
 
@@ -115,6 +146,7 @@ class TalentPoolEntry(BaseModel):
 
     pool_id: str
     file_name: str = ""
+    referred_by: str = ""
     created_at: Optional[datetime] = None
 
 
@@ -129,9 +161,13 @@ class CandidateProfile(BaseModel):
     address: str = ""
     profession: str = ""
     years_of_experience: int = 0
+    # Newest first: job, application date, current status and referrer per application
     applications: list[CandidateApplication] = []
     in_talent_pool: bool = False
     talent_pool_entries: list[TalentPoolEntry] = []
+    # Everyone who referred this person (any application or pool entry), most recent first
+    referrers: list[str] = []
+    last_activity: Optional[datetime] = None
 
 
 class CandidateUploadResult(BaseModel):

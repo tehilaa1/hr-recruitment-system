@@ -7,12 +7,34 @@ from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import get_firestore_service
 from app.models.candidate import CandidateProfile
-from app.services.candidate_search_service import search_candidates
+from app.services.candidate_search_service import list_people, list_referrers, search_candidates
 from app.services.firestore_service import FirestoreService
 
-router = APIRouter(prefix="/api/candidates", tags=["Global Search"])
+router = APIRouter(prefix="/api/candidates", tags=["Global Candidates"])
 
 DB = Annotated[FirestoreService, Depends(get_firestore_service)]
+
+
+@router.get("", response_model=list[CandidateProfile])
+async def list_all_people(db: DB):
+    """Every candidate as one person: all job applications and talent-pool entries,
+    merged by email or phone, most recently active first.
+
+    Computed on each request from the job candidates and the talent pool (the
+    sources of truth), so it never drifts from them.
+    """
+    candidates, jobs, pool = await _load_all(db)
+    return list_people(candidates, {j["id"]: j for j in jobs}, pool_candidates=pool)
+
+
+@router.get("/referrers", response_model=list[str])
+async def referrer_suggestions(db: DB):
+    """Referrer names already used (applications + talent pool), most used first."""
+    candidates, pool = await asyncio.gather(
+        asyncio.to_thread(db.list_all_candidates),
+        asyncio.to_thread(db.list_pool_candidates),
+    )
+    return list_referrers(candidates + pool)
 
 
 @router.get("/search", response_model=list[CandidateProfile])
@@ -27,10 +49,14 @@ async def global_candidate_search(
     every position the person applied to (with their status in each) and
     whether they are also in the talent pool.
     """
-    candidates, jobs, pool = await asyncio.gather(
+    candidates, jobs, pool = await _load_all(db)
+    jobs_by_id = {j["id"]: j for j in jobs}
+    return search_candidates(q, candidates, jobs_by_id, limit=limit, pool_candidates=pool)
+
+
+async def _load_all(db: FirestoreService):
+    return await asyncio.gather(
         asyncio.to_thread(db.list_all_candidates),
         asyncio.to_thread(db.list_jobs),
         asyncio.to_thread(db.list_pool_candidates),
     )
-    jobs_by_id = {j["id"]: j for j in jobs}
-    return search_candidates(q, candidates, jobs_by_id, limit=limit, pool_candidates=pool)

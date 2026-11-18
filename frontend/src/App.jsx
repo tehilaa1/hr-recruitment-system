@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import JobDetails from './pages/JobDetails';
 import JobsDashboard from './pages/JobsDashboard';
 import Login from './pages/Login';
+import AllCandidates from './pages/AllCandidates';
 import AnnualBudget from './pages/AnnualBudget';
 import MaternityLeave from './pages/MaternityLeave';
 import ResetPassword from './pages/ResetPassword';
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/jobs" element={<JobsDashboard />} />
             <Route path="/jobs/:jobId" element={<JobDetails />} />
             <Route path="/talent-pool" element={<TalentPool />} />
+            <Route path="/candidates" element={<AllCandidates />} />
             <Route path="/maternity" element={<MaternityLeave />} />
             <Route path="/budgets" element={<AnnualBudget />} />
           </Route>

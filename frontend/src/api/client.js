@@ -97,10 +97,12 @@ export const jobsApi = {
   matchPool: (id) => http.post(`/api/jobs/${id}/match-pool`),
 };
 
-/* multipart upload of CV files, reporting byte-upload progress (0–100) */
-const uploadFiles = (url, files, onProgress) => {
+/* multipart upload of CV files, reporting byte-upload progress (0–100).
+   `fields` are extra form fields applied to the whole batch (e.g. { referred_by }) */
+const uploadFiles = (url, files, onProgress, fields = {}) => {
   const form = new FormData();
   files.forEach((f) => form.append('files', f));
+  Object.entries(fields).forEach(([k, v]) => v && form.append(k, v));
   return http.post(url, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: (e) => {
@@ -111,12 +113,17 @@ const uploadFiles = (url, files, onProgress) => {
 
 export const talentPoolApi = {
   list: () => http.get('/api/talent-pool'),
-  upload: (files, onProgress) => uploadFiles('/api/talent-pool/upload', files, onProgress),
+  upload: (files, onProgress, fields) => uploadFiles('/api/talent-pool/upload', files, onProgress, fields),
   create: (data) => http.post('/api/talent-pool', data),
+  update: (id, data) => http.patch(`/api/talent-pool/${id}`, data),
   remove: (id) => http.delete(`/api/talent-pool/${id}`),
 };
 
 export const searchApi = {
+  /* Every person (job applications + talent pool merged by email/phone), newest activity first */
+  people: () => http.get('/api/candidates'),
+  /* Referrer names used so far, most used first (autocomplete) */
+  referrers: () => http.get('/api/candidates/referrers'),
   /* Global search across all jobs; returns merged person profiles */
   candidates: (q, { signal } = {}) =>
     http.get('/api/candidates/search', { params: { q }, signal }),
@@ -192,8 +199,11 @@ export async function openFileInNewTab(request, fallbackName) {
 export const candidatesApi = {
   list: (jobId) => http.get(`/api/jobs/${jobId}/candidates`),
 
-  upload: (jobId, files, onProgress) =>
-    uploadFiles(`/api/jobs/${jobId}/candidates/upload`, files, onProgress),
+  upload: (jobId, files, onProgress, fields) =>
+    uploadFiles(`/api/jobs/${jobId}/candidates/upload`, files, onProgress, fields),
+
+  /* Partial update, e.g. { referred_by } ("" clears it) */
+  update: (jobId, candidateId, data) => http.patch(`/api/jobs/${jobId}/candidates/${candidateId}`, data),
 
   /* Manual entry, no CV file */
   create: (jobId, data) => http.post(`/api/jobs/${jobId}/candidates`, data),

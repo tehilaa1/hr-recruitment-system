@@ -5,13 +5,13 @@ Run:  cd backend && python -m pytest tests/      (or: python tests/test_invoices
 """
 from __future__ import annotations
 
-import copy
 import io
 import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -22,7 +22,7 @@ from app.models.budget import INVOICE_MAX_BYTES, ExpenseResponse  # noqa: E402
 from app.routers import budgets  # noqa: E402
 from app.services import firestore_service as fs_module  # noqa: E402
 from app.services import invoice_service  # noqa: E402
-from app.services.firestore_service import FirestoreService  # noqa: E402
+from fake_firestore import fake_service  # noqa: E402
 from app.services.invoice_service import (  # noqa: E402
     detect_content_type,
     inline_disposition,
@@ -35,103 +35,8 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
 JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 100
 
 
-# ------------------------------------------------------------------ #
-# Minimal in-memory Firestore (only what FirestoreService uses here)   #
-# ------------------------------------------------------------------ #
-
-
-class _Snap:
-    def __init__(self, ref, data):
-        self.reference, self.id, self._data = ref, ref.id, data
-        self.exists = data is not None
-
-    def to_dict(self):
-        return copy.deepcopy(self._data)
-
-
-class _Doc:
-    def __init__(self, store, path):
-        self._store, self.path, self.id = store, path, path[-1]
-
-    def get(self):
-        return _Snap(self, self._store.get(self.path))
-
-    def set(self, data):
-        self._store[self.path] = copy.deepcopy(data)
-
-    def create(self, data):
-        if self.path in self._store:
-            raise ValueError("exists")
-        self.set(data)
-
-    def update(self, data):
-        if self.path not in self._store:
-            raise KeyError(self.path)
-        self._store[self.path].update(copy.deepcopy(data))
-
-    def delete(self):
-        self._store.pop(self.path, None)
-
-    def collection(self, name):
-        return _Col(self._store, self.path + (name,))
-
-
-class _Col:
-    _next = 0
-
-    def __init__(self, store, path):
-        self._store, self.path = store, path
-
-    def document(self, doc_id=None):
-        if doc_id is None:
-            _Col._next += 1
-            doc_id = f"auto{_Col._next}"
-        return _Doc(self._store, self.path + (doc_id,))
-
-    def list_documents(self):
-        n = len(self.path) + 1
-        return [_Doc(self._store, p) for p in sorted(self._store) if len(p) == n and p[:-1] == self.path]
-
-    def stream(self):
-        return [d.get() for d in self.list_documents()]
-
-
-class _Batch:
-    def __init__(self):
-        self._ops = []
-
-    def set(self, ref, data):
-        self._ops.append(lambda: ref.set(data))
-
-    def update(self, ref, data):
-        self._ops.append(lambda: ref.update(data))
-
-    def delete(self, ref):
-        self._ops.append(ref.delete)
-
-    def commit(self):
-        for op in self._ops:
-            op()
-
-
-class FakeFirestore:
-    def __init__(self):
-        self.store: dict[tuple, dict] = {}
-
-    def collection(self, name):
-        return _Col(self.store, (name,))
-
-    def batch(self):
-        return _Batch()
-
-    def chunk_paths(self):
-        return sorted(p for p in self.store if "invoice_chunks" in p)
-
-
 def _setup():
-    fake = FakeFirestore()
-    db = FirestoreService.__new__(FirestoreService)  # skip Firebase initialization
-    db._db = fake
+    fake, db = fake_service()
     db.create_budget_year(2026, {"total_budget": 10000})
     event = db.create_budget_event(2026, {"name": "חנוכה", "allocated_budget": 5000})
     app = FastAPI()

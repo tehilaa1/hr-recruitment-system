@@ -196,6 +196,12 @@ export default function JobDetails() {
     }
   };
 
+  /* Inline "הובא על ידי" edit; the table cell shows errors and keeps the old value */
+  const handleReferrerChange = async (candidateId, referredBy) => {
+    const { data } = await candidatesApi.update(jobId, candidateId, { referred_by: referredBy });
+    setCandidates((prev) => prev.map((c) => (c.id === candidateId ? { ...c, referred_by: data.referred_by } : c)));
+  };
+
   const handleManualAdd = async (payload) => {
     const { data } = await candidatesApi.create(jobId, payload);
     mergeCandidates([data]);
@@ -324,7 +330,7 @@ export default function JobDetails() {
         >
           <div className="p-6">
             <UploadBox
-              onUpload={(files, onProgress) => candidatesApi.upload(jobId, files, onProgress)}
+              onUpload={(files, onProgress, fields) => candidatesApi.upload(jobId, files, onProgress, fields)}
               onUploadComplete={handleUploadComplete}
               onUploadFinished={refreshCandidates}
             />
@@ -357,6 +363,7 @@ export default function JobDetails() {
             job={job}
             onStatusChange={handleStatusChange}
             onToggleComplete={handleToggleComplete}
+            onReferrerChange={handleReferrerChange}
             onDelete={handleDeleteCandidate}
           />
         </SectionCard>

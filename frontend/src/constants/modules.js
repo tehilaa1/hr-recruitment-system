@@ -1,4 +1,4 @@
-import { Baby, Briefcase, Library, Wallet } from 'lucide-react';
+import { Baby, Briefcase, Library, Users, Wallet } from 'lucide-react';
 
 /*
  * Top-level HR modules. Drives both the home page cards and the navbar tabs,
@@ -29,6 +29,19 @@ export const HR_MODULES = [
       icon: 'bg-teal-100 text-teal-600',
       ring: 'hover:border-teal-300 hover:shadow-teal-100',
       cta: 'text-teal-600',
+    },
+  },
+  {
+    key: 'candidates',
+    path: '/candidates',
+    title: 'כל המועמדים',
+    description:
+      'כל מועמד פעם אחת – מכל המשרות וממאגר המועמדים: היסטוריית מועמדויות, סטטוס בכל משרה, ומי הביא אותו (חבר מביא חבר).',
+    icon: Users,
+    accent: {
+      icon: 'bg-indigo-100 text-indigo-600',
+      ring: 'hover:border-indigo-300 hover:shadow-indigo-100',
+      cta: 'text-indigo-600',
     },
   },
   {

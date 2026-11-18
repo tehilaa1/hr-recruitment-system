@@ -7,7 +7,7 @@ import UserMenu from './UserMenu';
 export default function Navbar() {
   const { pathname } = useLocation();
   // Global candidate search (jobs + talent pool) belongs to the candidate modules
-  const showSearch = pathname.startsWith('/jobs') || pathname.startsWith('/talent-pool');
+  const showSearch = ['/jobs', '/talent-pool', '/candidates'].some((p) => pathname.startsWith(p));
 
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
@@ -36,7 +36,7 @@ export default function Navbar() {
                 }
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
-                {/* Four modules don't fit as text next to the search box on mid-size screens */}
+                {/* The modules don't fit as text next to the search box on mid-size screens */}
                 <span className="hidden xl:inline whitespace-nowrap">{title}</span>
               </NavLink>
             ))}

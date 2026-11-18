@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,14 +31,43 @@ def search_candidates(
     query = (query or "").strip()
     if not query:
         return []
-
-    records = list(candidates) + [{**c, _POOL: True} for c in pool_candidates or []]
-    groups = _group_by_identity(records)
+    groups = _people(candidates, pool_candidates)
     matched = [g for g in groups if any(_matches(query, c) for c in g)]
+    return _profiles(matched, jobs_by_id)[:limit]
 
-    profiles = [_build_profile(g, jobs_by_id) for g in matched]
+
+def list_people(
+    candidates: list[dict],
+    jobs_by_id: dict[str, dict],
+    pool_candidates: list[dict] | None = None,
+) -> list[dict]:
+    """Every person (job applications + talent pool, merged by email/phone), most recently active first."""
+    return _profiles(_people(candidates, pool_candidates), jobs_by_id)
+
+
+def list_referrers(records: list[dict]) -> list[str]:
+    """Distinct referrer names across applications and pool entries, most used first.
+
+    Names differing only in case/spacing count as one (the most common spelling wins).
+    """
+    spellings: dict[str, Counter] = {}
+    for r in records:
+        name = re.sub(r"\s+", " ", str(r.get("referred_by") or "")).strip()
+        if name:
+            spellings.setdefault(name.casefold(), Counter())[name] += 1
+    ranked = sorted(spellings.values(), key=lambda c: (-sum(c.values()), c.most_common(1)[0][0]))
+    return [c.most_common(1)[0][0] for c in ranked]
+
+
+def _people(candidates: list[dict], pool_candidates: list[dict] | None) -> list[list[dict]]:
+    records = list(candidates) + [{**c, _POOL: True} for c in pool_candidates or []]
+    return _group_by_identity(records)
+
+
+def _profiles(groups: list[list[dict]], jobs_by_id: dict[str, dict]) -> list[dict]:
+    profiles = [_build_profile(g, jobs_by_id) for g in groups]
     profiles.sort(key=lambda p: p.pop("_latest"), reverse=True)
-    return profiles[:limit]
+    return profiles
 
 
 # ------------------------------------------------------------------ #
@@ -168,6 +198,7 @@ def _build_profile(records: list[dict], jobs_by_id: dict[str, dict]) -> dict:
                 {
                     "pool_id": r["id"],
                     "file_name": r.get("file_name") or "",
+                    "referred_by": _referrer(r),
                     "created_at": r.get("created_at") if isinstance(r.get("created_at"), datetime) else None,
                 }
             )
@@ -184,6 +215,8 @@ def _build_profile(records: list[dict], jobs_by_id: dict[str, dict]) -> dict:
                 "interview_type": job.get("interview_type"),
                 "interview_location": job.get("interview_location") or "",
                 "recruitment_status": r.get("recruitment_status") or DEFAULT_STATUS,
+                "is_completed": bool(r.get("is_completed")),
+                "referred_by": _referrer(r),
                 "file_name": r.get("file_name") or "",
                 "created_at": r.get("created_at") if isinstance(r.get("created_at"), datetime) else None,
             }
@@ -202,6 +235,12 @@ def _build_profile(records: list[dict], jobs_by_id: dict[str, dict]) -> dict:
         "applications": applications,
         "in_talent_pool": bool(pool_entries),
         "talent_pool_entries": pool_entries,
+        "referrers": _unique(_referrer(r) for r in records),
+        "last_activity": _created(records[0]) if _created(records[0]) != _EPOCH else None,
         # Sort key for search results (popped before returning)
         "_latest": _created(records[0]),
     }
+
+
+def _referrer(record: dict) -> str:
+    return re.sub(r"\s+", " ", str(record.get("referred_by") or "")).strip()

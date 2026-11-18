@@ -9,6 +9,7 @@ import {
   MapPin,
   Phone,
   User,
+  UserPlus,
   X,
 } from 'lucide-react';
 import StatusBadge from './StatusBadge';
@@ -22,6 +23,17 @@ const formatDate = (iso) =>
       })
     : '—';
 
+function Referrer({ name }) {
+  return name ? (
+    <span className="inline-flex items-center gap-1 max-w-[160px] rounded-full bg-violet-50 border border-violet-100 px-2 py-0.5 text-xs text-violet-700" title={`הובא על ידי ${name}`}>
+      <UserPlus className="h-3 w-3 flex-shrink-0" />
+      <span className="truncate">{name}</span>
+    </span>
+  ) : (
+    <span className="text-gray-300">—</span>
+  );
+}
+
 function ContactRow({ icon: Icon, children }) {
   return (
     <div className="flex items-center gap-2 text-sm text-gray-700 min-w-0">
@@ -31,7 +43,8 @@ function ContactRow({ icon: Icon, children }) {
   );
 }
 
-/* Candidate profile: contact details + every position they applied to */
+/* Candidate profile: contact details + application history
+   (job, date, current status and referrer of every application, newest first) */
 export default function CandidateProfileModal({ profile, onClose }) {
   const navigate = useNavigate();
 
@@ -93,6 +106,12 @@ export default function CandidateProfileModal({ profile, onClose }) {
                   .filter(Boolean)
                   .join(' · ') || 'פרופיל מועמד'}
               </p>
+              {profile.referrers?.length > 0 && (
+                <p className="flex flex-wrap items-center gap-1.5 mt-1.5 text-xs text-gray-500">
+                  הובא/ה על ידי:
+                  {profile.referrers.map((r) => <Referrer key={r} name={r} />)}
+                </p>
+              )}
             </div>
           </div>
           <button
@@ -154,7 +173,8 @@ export default function CandidateProfileModal({ profile, onClose }) {
                     <FileText className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
                     <span className="truncate">{e.file_name || 'הוזן ידנית'}</span>
                   </span>
-                  <span className="flex items-center gap-1 text-xs text-gray-500 whitespace-nowrap">
+                  <span className="flex items-center gap-2 text-xs text-gray-500 whitespace-nowrap">
+                    {e.referred_by && <Referrer name={e.referred_by} />}
                     נוסף {formatDate(e.created_at)}
                     <ChevronLeft className="h-4 w-4 text-gray-300" />
                   </span>
@@ -168,7 +188,7 @@ export default function CandidateProfileModal({ profile, onClose }) {
         <div className="px-6 py-4">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-3">
             <Briefcase className="h-4 w-4 text-gray-400" />
-            משרות שהמועמד הגיש אליהן ({apps.length})
+            היסטוריית מועמדויות ({apps.length})
           </h3>
           {apps.length === 0 ? (
             <p className="text-sm text-gray-500 bg-gray-50 rounded-xl px-4 py-3">
@@ -182,8 +202,9 @@ export default function CandidateProfileModal({ profile, onClose }) {
                 <tr className="bg-gray-50 text-xs text-gray-500">
                   <th className="px-4 py-2.5 text-right font-semibold">משרה</th>
                   <th className="px-4 py-2.5 text-right font-semibold">סוג ראיון</th>
-                  <th className="px-4 py-2.5 text-right font-semibold">סטטוס</th>
-                  <th className="px-4 py-2.5 text-right font-semibold">נוסף בתאריך</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">סטטוס במשרה</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">הובא על ידי</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">תאריך הגשה</th>
                   <th className="w-8" />
                 </tr>
               </thead>
@@ -200,8 +221,12 @@ export default function CandidateProfileModal({ profile, onClose }) {
                       <td className="px-4 py-3 font-medium text-gray-900">{a.job_title}</td>
                       <td className="px-4 py-3 text-gray-600">{a.interview_type || '—'}</td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={a.recruitment_status} />
+                        <div className="flex items-center gap-1.5">
+                          <StatusBadge status={a.recruitment_status} />
+                          {a.is_completed && <span className="text-[11px] text-gray-400 whitespace-nowrap">· טיפול הסתיים</span>}
+                        </div>
                       </td>
+                      <td className="px-4 py-3"><Referrer name={a.referred_by} /></td>
                       <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
                         {formatDate(a.created_at)}
                       </td>

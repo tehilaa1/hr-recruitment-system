@@ -169,6 +169,14 @@ class FirestoreService:
         )
         return [{"id": d.id, **d.to_dict()} for d in docs]
 
+    def update_pool_candidate(self, candidate_id: str, data: dict) -> Optional[dict]:
+        ref = self._db.collection(self._TALENT_POOL).document(candidate_id)
+        if not ref.get().exists:
+            return None
+        ref.update(data)
+        updated = ref.get()
+        return {"id": updated.id, **updated.to_dict()}
+
     def delete_pool_candidate(self, candidate_id: str) -> bool:
         ref = self._db.collection(self._TALENT_POOL).document(candidate_id)
         if not ref.get().exists:

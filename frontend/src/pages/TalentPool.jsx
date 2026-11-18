@@ -12,6 +12,7 @@ import {
 import { apiErrorMessage, talentPoolApi } from '../api/client';
 import CandidateFormModal from '../components/CandidateFormModal';
 import Navbar from '../components/Navbar';
+import { ReferrerCell } from '../components/ReferrerInput';
 import UploadBox from '../components/UploadBox';
 
 const Empty = () => <span className="text-gray-300">—</span>;
@@ -31,7 +32,7 @@ const digits = (v) => String(v || '').replace(/\D/g, '');
 
 function matchesQuery(c, q) {
   if (!q) return true;
-  const text = [c.full_name, c.family_name, c.email, c.profession, c.address, c.file_name]
+  const text = [c.full_name, c.family_name, c.email, c.profession, c.address, c.file_name, c.referred_by]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
@@ -80,6 +81,11 @@ export default function TalentPool() {
   const handleManualAdd = async (payload) => {
     const { data } = await talentPoolApi.create(payload);
     mergeCandidates([data]);
+  };
+
+  const handleReferrerChange = async (candidateId, referredBy) => {
+    const { data } = await talentPoolApi.update(candidateId, { referred_by: referredBy });
+    setCandidates((prev) => prev.map((c) => (c.id === candidateId ? { ...c, referred_by: data.referred_by } : c)));
   };
 
   const handleDelete = async (candidate) => {
@@ -152,7 +158,7 @@ export default function TalentPool() {
           </div>
           <div className="p-6">
             <UploadBox
-              onUpload={(files, onProgress) => talentPoolApi.upload(files, onProgress)}
+              onUpload={(files, onProgress, fields) => talentPoolApi.upload(files, onProgress, fields)}
               onUploadComplete={mergeCandidates}
               onUploadFinished={() => fetchPool({ silent: true })}
             />
@@ -178,7 +184,7 @@ export default function TalentPool() {
                   type="search"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="חיפוש לפי שם, מייל, טלפון, מקצוע…"
+                  placeholder="חיפוש לפי שם, מייל, טלפון, מקצוע, ממליץ…"
                   className="w-full sm:w-72 border border-gray-200 rounded-lg pr-9 pl-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
                 />
               </div>
@@ -230,7 +236,7 @@ export default function TalentPool() {
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-gray-50/80 border-b border-gray-200">
-                    {['שם', 'טלפון', 'מייל', 'כתובת מגורים', 'מקצוע', 'שנות ניסיון', 'מקור', 'נוסף בתאריך'].map((h) => (
+                    {['שם', 'טלפון', 'מייל', 'כתובת מגורים', 'מקצוע', 'שנות ניסיון', 'הובא על ידי', 'מקור', 'נוסף בתאריך'].map((h) => (
                       <th key={h} className="px-4 py-3 text-right text-xs font-semibold text-gray-500 whitespace-nowrap">
                         {h}
                       </th>
@@ -270,6 +276,9 @@ export default function TalentPool() {
                             {c.years_of_experience}
                           </span>
                         ) : <Empty />}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <ReferrerCell value={c.referred_by} onSave={(v) => handleReferrerChange(c.id, v)} />
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px] truncate" title={c.file_name}>
                         {c.file_name ? (

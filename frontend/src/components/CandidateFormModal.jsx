@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiErrorMessage } from '../api/client';
+import { REFERRER_LABEL } from '../constants/referrals';
 import { RECRUITMENT_STATUSES } from '../constants/statuses';
 import Modal, { secondaryButtonClass } from './Modal';
+import { ReferrerInput, rememberReferrer } from './ReferrerInput';
 
 const INPUT =
   'w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition';
@@ -14,6 +16,7 @@ const EMPTY = {
   address: '',
   profession: '',
   years_of_experience: '',
+  referred_by: '',
   recruitment_status: RECRUITMENT_STATUSES[0],
 };
 
@@ -70,6 +73,7 @@ export default function CandidateFormModal({ title, subtitle, withStatus = false
     setSaving(true);
     try {
       await onSubmit(payload);
+      rememberReferrer(payload.referred_by);
       onClose();
     } catch (err) {
       setError(apiErrorMessage(err, 'שגיאה בשמירת המועמד. נסה שנית.'));
@@ -126,6 +130,13 @@ export default function CandidateFormModal({ title, subtitle, withStatus = false
             value={form.years_of_experience}
             onChange={set('years_of_experience')}
             placeholder="0"
+            className={INPUT}
+          />
+        </Field>
+        <Field label={`${REFERRER_LABEL} (חבר מביא חבר)`} className="col-span-2">
+          <ReferrerInput
+            value={form.referred_by}
+            onChange={(v) => setForm((p) => ({ ...p, referred_by: v }))}
             className={INPUT}
           />
         </Field>

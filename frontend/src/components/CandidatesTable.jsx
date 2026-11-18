@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { CalendarPlus, Mail, Trash2, UserX } from 'lucide-react';
 import CompleteToggle from './CompleteToggle';
+import { ReferrerCell } from './ReferrerInput';
 import StatusSelect from './StatusSelect';
 import {
   buildInterviewInviteUrl,
@@ -53,6 +54,7 @@ const COLUMNS = [
   { key: 'address',              label: 'כתובת מגורים',  width: 'min-w-[150px]' },
   { key: 'profession',           label: 'מקצוע',         width: 'min-w-[120px]' },
   { key: 'years_of_experience',  label: 'שנות ניסיון',   width: 'min-w-[90px]'  },
+  { key: 'referred_by',          label: 'הובא על ידי',   width: 'min-w-[130px]' },
   { key: 'recruitment_status',   label: 'סטטוס גיוס',    width: 'min-w-[160px]' },
   { key: 'is_completed',         label: 'סיום טיפול',    width: 'min-w-[120px]' },
 ];
@@ -64,7 +66,7 @@ const activeFirst = (list) =>
     .sort(([a, ai], [b, bi]) => Number(!!a.is_completed) - Number(!!b.is_completed) || ai - bi)
     .map(([c]) => c);
 
-export default function CandidatesTable({ candidates, job, onStatusChange, onToggleComplete, onDelete }) {
+export default function CandidatesTable({ candidates, job, onStatusChange, onToggleComplete, onReferrerChange, onDelete }) {
   const [updatingId, setUpdatingId] = useState(null);
   const [completingIds, setCompletingIds] = useState(() => new Set());
   const sorted = useMemo(() => activeFirst(candidates), [candidates]);
@@ -201,6 +203,11 @@ export default function CandidatesTable({ candidates, job, onStatusChange, onTog
                 ) : (
                   <span className="text-gray-300">—</span>
                 )}
+              </td>
+
+              {/* הובא על ידי */}
+              <td className="px-4 py-3 whitespace-nowrap">
+                <ReferrerCell value={c.referred_by} onSave={(v) => onReferrerChange(c.id, v)} />
               </td>
 
               {/* סטטוס גיוס */}

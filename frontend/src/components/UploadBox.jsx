@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle, Copy, FileText, Image, Loader2, Upload, X, XCircle } from 'lucide-react';
 import { apiErrorMessage } from '../api/client';
+import { REFERRER_LABEL, cleanReferrer } from '../constants/referrals';
+import { ReferrerInput, rememberReferrer } from './ReferrerInput';
 
 const ACCEPTED = '.pdf,.docx,.doc,.png,.jpg,.jpeg';
 const ACCEPT_LABEL = 'PDF, Word (.docx), תמונה (PNG, JPG)';
@@ -61,7 +63,7 @@ function UploadProgress({ fileCount, percent }) {
 }
 
 /*
- * onUpload(files, onProgress) → axios promise resolving to per-file results
+ * onUpload(files, onProgress, { referred_by }) → axios promise resolving to per-file results
  * onUploadComplete(savedCandidates) → called with the successfully saved records
  * onUploadFinished() → always called afterwards (success *or* failure) so the
  *   parent can re-fetch: a request that timed out may still have saved candidates.
@@ -73,6 +75,7 @@ export default function UploadBox({ onUpload, onUploadComplete, onUploadFinished
   const [progress, setProgress] = useState(0);
   const [uploadCount, setUploadCount] = useState(0);
   const [results, setResults] = useState(null);
+  const [referredBy, setReferredBy] = useState(''); // applies to every file of the batch
   const dragCounter = useRef(0);
   const inputRef = useRef(null);
 
@@ -113,9 +116,12 @@ export default function UploadBox({ onUpload, onUploadComplete, onUploadFinished
     setProgress(0);
     setUploadCount(files.length);
     try {
-      const { data } = await onUpload(files, setProgress);
+      const referrer = cleanReferrer(referredBy);
+      const { data } = await onUpload(files, setProgress, { referred_by: referrer });
       setResults(data);
       setFiles([]);
+      setReferredBy('');
+      rememberReferrer(referrer);
       const successful = data.filter((r) => r.success && r.candidate).map((r) => r.candidate);
       onUploadComplete?.(successful);
     } catch (err) {
@@ -261,6 +267,20 @@ export default function UploadBox({ onUpload, onUploadComplete, onUploadFinished
             );
           })}
         </div>
+      )}
+
+      {/* Referrer for the whole batch */}
+      {files.length > 0 && !uploading && (
+        <label className="block">
+          <span className="block text-xs font-medium text-gray-600 mb-1">
+            {REFERRER_LABEL} <span className="text-gray-400 font-normal">(אופציונלי · יחול על כל הקבצים בהעלאה זו)</span>
+          </span>
+          <ReferrerInput
+            value={referredBy}
+            onChange={setReferredBy}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </label>
       )}
 
       {/* Progress / upload button */}
