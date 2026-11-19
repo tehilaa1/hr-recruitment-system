@@ -20,6 +20,7 @@ from app.models.candidate import (
     CandidateUploadResult,
     clean_referrer,
 )
+from app.services.cv_file_service import CvFile, cv_response, read_cv_upload
 from app.services.cv_ingest_service import describe_duplicate, ingest_cvs
 from app.services.dedup_service import CandidateDeduplicator
 from app.services.firestore_service import FirestoreService
@@ -66,7 +67,7 @@ async def upload_candidates(
         files,
         ai,
         CandidateDeduplicator(existing),
-        save=lambda data: db.create_candidate(job_id, data),
+        save=lambda data, cv: db.create_candidate(job_id, data, cv),
         duplicate_message=_duplicate_message,
         extra_fields={
             "recruitment_status": DEFAULT_STATUS,
@@ -104,6 +105,7 @@ async def assign_from_pool(
     """Copy a talent-pool candidate into this job (the pool record is kept).
 
     The pool entry's referrer is kept unless the body sets a different one.
+    The pool entry's original CV file (if stored) is copied with it.
     """
     await _assert_job(job_id, db)
     pooled = await asyncio.to_thread(db.get_pool_candidate, pool_candidate_id)
@@ -123,7 +125,28 @@ async def assign_from_pool(
             else clean_referrer(pooled.get("referred_by") or "")
         ),
     }
-    return await _create_unless_duplicate(job_id, data, db)
+    cv = await asyncio.to_thread(db.get_pool_cv, pool_candidate_id)
+    return await _create_unless_duplicate(job_id, data, db, cv)
+
+
+# ------------------------------------------------------------------ #
+# Original CV file                                                     #
+# ------------------------------------------------------------------ #
+
+
+@router.get("/{candidate_id}/cv")
+async def get_candidate_cv(job_id: str, candidate_id: str, db: DB):
+    """The candidate's original CV file (404 if none was stored)."""
+    return cv_response(await asyncio.to_thread(db.get_candidate_cv, job_id, candidate_id))
+
+
+@router.put("/{candidate_id}/cv", response_model=CandidateResponse)
+async def attach_candidate_cv(job_id: str, candidate_id: str, db: DB, file: UploadFile = File(...)):
+    """Attach (or replace) the CV file of an existing candidate. Details are not re-parsed."""
+    cv = await read_cv_upload(file)
+    saved = await asyncio.to_thread(db.set_candidate_cv, job_id, candidate_id, cv)
+    _assert_candidate(saved, candidate_id)
+    return saved
 
 
 # ------------------------------------------------------------------ #
@@ -208,7 +231,9 @@ def _duplicate_message(field: str, existing: dict) -> str:
     return f"מועמד עם {field_label} ({value}) כבר קיים במשרה: {name}. הקובץ לא נוסף."
 
 
-async def _create_unless_duplicate(job_id: str, data: dict, db: FirestoreService) -> dict:
+async def _create_unless_duplicate(
+    job_id: str, data: dict, db: FirestoreService, cv: Optional[CvFile] = None
+) -> dict:
     existing = await asyncio.to_thread(db.list_candidates, job_id)
     match = CandidateDeduplicator(existing).find(data)
     if match:
@@ -218,7 +243,7 @@ async def _create_unless_duplicate(job_id: str, data: dict, db: FirestoreService
             http_status.HTTP_409_CONFLICT,
             f"מועמד עם {field_label} ({value}) כבר קיים במשרה: {name}.",
         )
-    return await asyncio.to_thread(db.create_candidate, job_id, data)
+    return await asyncio.to_thread(db.create_candidate, job_id, data, cv)
 
 
 async def _assert_job(job_id: str, db: FirestoreService) -> None:

@@ -47,10 +47,10 @@ def split_chunks(data: bytes, size: int = CHUNK_BYTES) -> list[bytes]:
     return [data[i:i + size] for i in range(0, len(data), size)] or [b""]
 
 
-def inline_disposition(file_name: str) -> str:
+def inline_disposition(file_name: str, fallback_stem: str = "invoice") -> str:
     """Content-Disposition that opens in the browser and keeps a Hebrew name (RFC 5987)."""
     ascii_name = "".join(c if c.isascii() and c.isprintable() and c not in '"\\;' else "_" for c in file_name)
     stem, _, ext = ascii_name.rpartition(".")
     if not stem.strip("_ "):
-        ascii_name = f"invoice.{ext}"
+        ascii_name = f"{fallback_stem}.{ext}"
     return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(file_name)}"

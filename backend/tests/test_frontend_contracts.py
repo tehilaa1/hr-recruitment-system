@@ -12,6 +12,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.models.candidate import CandidateCreate, CandidateManualBase  # noqa: E402
+from app.services.cv_file_service import CV_UPLOAD_EXTENSIONS  # noqa: E402
 
 FRONTEND_SRC = BACKEND_DIR.parent / "frontend" / "src"
 
@@ -25,9 +26,31 @@ def test_every_module_has_a_route():
     modules = re.findall(r"path:\s*'([^']+)'", _read("constants/modules.js"))
     routes = set(re.findall(r'<Route\s+path="([^"]+)"', _read("App.jsx")))
     assert modules, "no modules found"
-    assert "/talent-pool" in modules
     missing = [m for m in modules if m not in routes]
     assert not missing, f"modules without a <Route>: {missing}"
+
+
+def test_talent_pool_and_all_candidates_are_one_module():
+    """The talent pool and "all candidates" are a single module at /candidates;
+    the old /talent-pool URL redirects there instead of breaking."""
+    modules = re.findall(r"path:\s*'([^']+)'", _read("constants/modules.js"))
+    assert "/candidates" in modules
+    assert "/talent-pool" not in modules
+    app = _read("App.jsx")
+    assert re.search(r'<Route\s+path="/talent-pool/\*"\s+element=\{<Navigate to="/candidates" replace />\}', app)
+    for gone in ("pages/TalentPool.jsx", "pages/AllCandidates.jsx"):
+        assert not (FRONTEND_SRC / gone).exists(), f"{gone} should be merged into pages/Candidates.jsx"
+    # No in-app link still points at the old route
+    for path in FRONTEND_SRC.rglob("*.js*"):
+        text = path.read_text(encoding="utf-8")
+        for m in re.finditer(r"['\"`]/talent-pool", text):
+            assert path.name == "App.jsx", f"{path.relative_to(FRONTEND_SRC)} links to /talent-pool"
+
+
+def test_cv_accept_list_matches_backend():
+    source = _read("utils/candidateCv.js")
+    accept = re.search(r"CV_ACCEPT\s*=\s*'([^']+)'", source).group(1)
+    assert {e.lstrip(".") for e in accept.split(",")} == CV_UPLOAD_EXTENSIONS
 
 
 def test_manual_candidate_form_matches_backend_model():

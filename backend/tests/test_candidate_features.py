@@ -72,8 +72,10 @@ def _cv(name: str, **fields) -> FakeUpload:
 
 
 def _save_into(store: list):
-    def save(data: dict) -> dict:
-        saved = {"id": f"id{len(store)}", **data}
+    def save(data: dict, cv=None) -> dict:
+        # The test CVs are JSON, not a storable file type, so cv is None here
+        # (storing real files is covered by tests/test_cv_files.py)
+        saved = {"id": f"id{len(store)}", **data, "_cv": cv}
         store.append(saved)
         return saved
     return save
