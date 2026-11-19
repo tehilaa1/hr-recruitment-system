@@ -93,8 +93,9 @@ Key architectural points:
   - `לשלוח זימון` → **"זימון ב-Outlook"** opens a new calendar event with all interviewers + the candidate as attendees and the interview address in the location and notes. **Date/time are intentionally left empty** for the user to choose.
 - **Excel export:** real `.xlsx` (RTL sheet, styled header, frozen top row), Hebrew filename via RFC 5987 `filename*`, phone numbers stored as text, tolerant of missing/malformed fields.
 - **Global candidate search** (navbar, inside the jobs module): search across **all jobs** by name (either order), email or phone (any format). Records sharing an email/phone are merged into one person. Selecting a result opens a **candidate profile** with contact details and every position applied to, with status and date.
-- **Referred by (הובא על ידי – חבר מביא חבר):** recorded **per application** (and per talent-pool entry), so the same person can be referred to different jobs by different employees. Set it in the manual-add form, once for a whole CV upload batch, or inline in the job / talent-pool tables (autocomplete from names used before). Assigning a pool candidate to a job keeps the pool's referrer. Included in the candidates Excel export.
-- **All candidates (`/candidates`):** every person once — job applications and talent-pool entries merged by normalized email or phone — with filters (source, referrer). The profile shows the full **application history**: job, application date, current status in that job and the referrer of each application. The list is computed on each request from the job candidates and the talent pool (the sources of truth), so there is no second copy that can drift; no top-level `candidates` collection is used, since job candidates are read with a `candidates` collection-group query.
+- **Referred by (הובא על ידי – חבר מביא חבר):** recorded **per application** (and per talent-pool entry), so the same person can be referred to different jobs by different employees. Set it in the manual-add form, once for a whole CV upload batch, or inline in the job / candidates tables and in the candidate profile (autocomplete from names used before). Assigning a pool candidate to a job keeps the pool's referrer. Included in the candidates Excel export.
+- **Candidates module (`/candidates`) — talent pool + all candidates in one view:** every person once — job applications and talent-pool entries merged by normalized email or phone. View tabs (all / pool only – not assigned / assigned to jobs / referred), search, and filters by referrer, job, profession and experience. Add candidates by CV upload or manual entry, either to the pool or straight into a job. The profile shows the **CV**, the pool entry (editable referrer, assign to a job, remove from pool) and the full **application history**: job, application date, current status and the (editable) referrer of each application. The list is computed on each request from the job candidates and the talent pool (the sources of truth), so there is no second copy that can drift; no top-level `candidates` collection is used, since job candidates are read with a `candidates` collection-group query. The former `/talent-pool` page redirects here.
+- **CV files:** the original uploaded CV (PDF, Word, PNG/JPG/WEBP, up to 8 MB, type checked from the file's bytes) is kept with the record it was parsed into and opens from the candidate profile (or the CV column of the candidates table). Assigning a pool candidate to a job copies the file. Records created before CV files were kept, and manual entries, show a clear "no CV" state with an option to attach one.
 
 ### 3. Maternity leave tracking (`/maternity`)
 - **Dynamic table** generated from a column config. Initial columns: name, phone, company email, birth date, estimated return date, gift delivery address, delivery contact (name + phone), attendance-updated (yes/no), notes.
@@ -149,7 +150,13 @@ jobs/{jobId}
   interview_location, interview_type ("יחידני" | "מרוכז"), created_at
   └── candidates/{candidateId}          (subcollection)
         full_name, family_name, phone, email, address, profession,
-        years_of_experience, recruitment_status, file_name, job_id, created_at
+        years_of_experience, recruitment_status, file_name, job_id, created_at,
+        cv_file {file_name, content_type, size, uploaded_at} (optional)
+        └── cv_chunks/{0000, 0001, …}   (original CV bytes, ≤ 900 KB each)
+
+talent_pool/{candidateId}
+  same person fields, referred_by, file_name, created_at, cv_file (optional)
+  └── cv_chunks/{0000, …}
 
 maternity_leaves/{recordId}
   name, phone, company_email, birth_date ("YYYY-MM-DD"), expected_return_date ("YYYY-MM-DD"),
@@ -165,7 +172,7 @@ users/{email}                          (document id = lower-cased email)
 ```
 
 - Dates without time are stored as ISO `YYYY-MM-DD` strings (Firestore has no date-only type).
-- Deleting a job deletes its candidates subcollection.
+- Deleting a job deletes its candidates subcollection (and their CV files).
 - Global search uses a **collection-group query** on `candidates`, which needs no composite index.
 
 ---
@@ -193,6 +200,9 @@ Interactive docs are served at **`/docs`** (Swagger) and **`/redoc`** when the b
 | GET | `/api/candidates` | Every person (applications + talent pool merged), with application history and referrers |
 | GET | `/api/candidates/referrers` | Referrer names used so far, most used first |
 | PATCH | `/api/talent-pool/{candidate_id}` | Update a talent-pool entry (`referred_by`) |
+| GET / PUT | `/api/talent-pool/{candidate_id}/cv` | Open the stored CV file / attach or replace it (multipart `file`) |
+| GET / PUT | `/api/jobs/{job_id}/candidates/{candidate_id}/cv` | Same for a job candidate |
+| GET | `/api/candidates/by-record/{record_id}` | The merged profile of the person owning a job-candidate or pool record |
 | GET / POST | `/api/maternity` | List / create maternity records |
 | PATCH / DELETE | `/api/maternity/{record_id}` | Partial update / delete a record |
 | GET / PUT | `/api/maternity/settings` | Read / save notification settings |

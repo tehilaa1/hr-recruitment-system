@@ -14,6 +14,7 @@ from app.models.talent_pool import (
     TalentPoolCandidateUpdate,
     TalentPoolUploadResult,
 )
+from app.services.cv_file_service import cv_response, read_cv_upload
 from app.services.cv_ingest_service import describe_duplicate, ingest_cvs
 from app.services.dedup_service import CandidateDeduplicator
 from app.services.firestore_service import FirestoreService
@@ -47,7 +48,7 @@ async def upload_to_pool(
         files,
         ai,
         CandidateDeduplicator(existing),
-        save=db.create_pool_candidate,
+        save=db.create_pool_candidate,  # (record, cv)
         duplicate_message=lambda field, match: _duplicate_message(field, match)
         + " הקובץ לא נוסף.",
         extra_fields={"referred_by": clean_referrer(referred_by)},
@@ -76,6 +77,22 @@ async def update_pool_candidate(candidate_id: str, payload: TalentPoolCandidateU
     if updated is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "המועמד לא נמצא במאגר")
     return updated
+
+
+@router.get("/{candidate_id}/cv")
+async def get_pool_cv(candidate_id: str, db: DB):
+    """The pool entry's original CV file (404 if none was stored)."""
+    return cv_response(await asyncio.to_thread(db.get_pool_cv, candidate_id))
+
+
+@router.put("/{candidate_id}/cv", response_model=TalentPoolCandidateResponse)
+async def attach_pool_cv(candidate_id: str, db: DB, file: UploadFile = File(...)):
+    """Attach (or replace) the CV file of an existing pool entry. Details are not re-parsed."""
+    cv = await read_cv_upload(file)
+    saved = await asyncio.to_thread(db.set_pool_cv, candidate_id, cv)
+    if saved is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "המועמד לא נמצא במאגר")
+    return saved
 
 
 @router.delete("/{candidate_id}", status_code=http_status.HTTP_204_NO_CONTENT)

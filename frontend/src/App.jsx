@@ -5,11 +5,10 @@ import Home from './pages/Home';
 import JobDetails from './pages/JobDetails';
 import JobsDashboard from './pages/JobsDashboard';
 import Login from './pages/Login';
-import AllCandidates from './pages/AllCandidates';
 import AnnualBudget from './pages/AnnualBudget';
+import Candidates from './pages/Candidates';
 import MaternityLeave from './pages/MaternityLeave';
 import ResetPassword from './pages/ResetPassword';
-import TalentPool from './pages/TalentPool';
 import UserManagement from './pages/UserManagement';
 
 export default function App() {
@@ -26,8 +25,10 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/jobs" element={<JobsDashboard />} />
             <Route path="/jobs/:jobId" element={<JobDetails />} />
-            <Route path="/talent-pool" element={<TalentPool />} />
-            <Route path="/candidates" element={<AllCandidates />} />
+            {/* One candidates module: the talent pool + every job's applicants */}
+            <Route path="/candidates" element={<Candidates />} />
+            {/* The former separate talent-pool module — old links and bookmarks land here */}
+            <Route path="/talent-pool/*" element={<Navigate to="/candidates" replace />} />
             <Route path="/maternity" element={<MaternityLeave />} />
             <Route path="/budgets" element={<AnnualBudget />} />
           </Route>

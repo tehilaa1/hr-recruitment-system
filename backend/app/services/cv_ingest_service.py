@@ -4,7 +4,8 @@
 2. Parse all CVs with Gemini *concurrently* (bounded by the service's semaphore).
 3. Deduplicate in upload order, so duplicates inside the same batch are caught
    deterministically (the first file wins).
-4. Save the new candidates to Firestore concurrently.
+4. Save the new candidates to Firestore concurrently, each with its original
+   CV file (when it is a storable type/size), so it can be opened later.
 
 One failing file never fails the batch — each file gets its own result.
 """
@@ -12,30 +13,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import UploadFile
 
+from app.services.cv_file_service import CV_UPLOAD_EXTENSIONS, CvFile, build_cv_file
 from app.services.dedup_service import CandidateDeduplicator
 from app.services.gemini_service import GeminiService
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png", "webp", "docx", "doc"}
+ALLOWED_EXTENSIONS = CV_UPLOAD_EXTENSIONS
 
 
 async def ingest_cvs(
     files: list[UploadFile],
     ai: GeminiService,
     dedup: CandidateDeduplicator,
-    save: Callable[[dict], dict],
+    save: Callable[[dict, Optional[CvFile]], dict],
     duplicate_message: Callable[[str, dict], str],
     extra_fields: dict | None = None,
 ) -> list[dict]:
     """Returns one dict per file, in upload order, with the keys
     file_name, success, candidate (saved record or None), error, duplicate, duplicate_of_id.
 
-    `save` is a blocking Firestore write (run in a thread) that returns the saved record.
+    `save(record, cv)` is a blocking Firestore write (run in a thread) that returns
+    the saved record; `cv` is the original file, or None if it can't be stored.
     """
     results: list[dict] = []
     to_parse: list[tuple[int, bytes, str, str]] = []
@@ -68,9 +71,9 @@ async def ingest_cvs(
     )
 
     # --- 3. dedup in upload order ------------------------------------ #
-    pending_saves: list[tuple[int, dict]] = []
+    pending_saves: list[tuple[int, dict, Optional[CvFile]]] = []
     duplicates: list[tuple[int, str, dict]] = []
-    for (idx, _, file_name, _), parsed in zip(to_parse, parsed_list):
+    for (idx, content, file_name, _), parsed in zip(to_parse, parsed_list):
         if isinstance(parsed, BaseException):
             logger.error("Failed to parse %r: %s", file_name, parsed)
             results[idx]["error"] = str(parsed) or "עיבוד הקובץ נכשל"
@@ -90,14 +93,17 @@ async def ingest_cvs(
         # Registered before saving so later files in this batch are checked against it;
         # its "id" is filled in once the save finishes.
         dedup.add(record)
-        pending_saves.append((idx, record))
+        cv = build_cv_file(file_name, content)
+        if cv is None:
+            logger.warning("Original file %r not kept (unsupported content or too large)", file_name)
+        pending_saves.append((idx, record, cv))
 
     # --- 4. save in parallel ----------------------------------------- #
     saved_list = await asyncio.gather(
-        *(asyncio.to_thread(save, dict(record)) for _, record in pending_saves),
+        *(asyncio.to_thread(save, dict(record), cv) for _, record, cv in pending_saves),
         return_exceptions=True,
     )
-    for (idx, record), saved in zip(pending_saves, saved_list):
+    for (idx, record, _), saved in zip(pending_saves, saved_list):
         if isinstance(saved, BaseException):
             logger.error("Failed to save %r: %s", results[idx]["file_name"], saved)
             results[idx]["error"] = f"שמירת המועמד נכשלה: {saved}"

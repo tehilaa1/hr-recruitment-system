@@ -35,6 +35,14 @@ def clean_referrer(value):
     return re.sub(r"\s+", " ", value).strip() if isinstance(value, str) else value
 
 
+class CvFileInfo(BaseModel):
+    """The original CV file stored with a record (download it from the record's /cv endpoint)."""
+
+    file_name: str
+    content_type: str
+    size: int = 0
+
+
 class CandidateBase(BaseModel):
     full_name: str = ""
     family_name: str = ""
@@ -73,6 +81,13 @@ class CandidateManualBase(BaseModel):
         if not v:
             raise ValueError("שם פרטי הוא שדה חובה")
         return v
+
+
+def _public_cv(value):
+    """Stored cv_file metadata → its public part (drops e.g. uploaded_at; bad data → None)."""
+    from app.services.cv_file_service import cv_info
+
+    return cv_info({"cv_file": value}) if value is not None else None
 
 
 class CandidateCreate(CandidateManualBase):
@@ -122,7 +137,11 @@ class CandidateResponse(CandidateBase):
     # "סיום טיפול" — recruiter is done with this candidate (missing in older records)
     is_completed: bool = False
     file_name: str = ""
+    # None: no stored file (manual entry, or uploaded before CV files were kept)
+    cv_file: Optional[CvFileInfo] = None
     created_at: datetime
+
+    _cv = field_validator("cv_file", mode="before")(_public_cv)
 
 
 class CandidateApplication(BaseModel):
@@ -138,6 +157,7 @@ class CandidateApplication(BaseModel):
     is_completed: bool = False
     referred_by: str = ""
     file_name: str = ""
+    cv_file: Optional[CvFileInfo] = None
     created_at: Optional[datetime] = None
 
 
@@ -146,6 +166,7 @@ class TalentPoolEntry(BaseModel):
 
     pool_id: str
     file_name: str = ""
+    cv_file: Optional[CvFileInfo] = None
     referred_by: str = ""
     created_at: Optional[datetime] = None
 

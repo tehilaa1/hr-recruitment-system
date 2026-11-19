@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.models.candidate import DEFAULT_STATUS
+from app.services.cv_file_service import cv_info
 from app.services.dedup_service import normalize_email, normalize_phone
 
 _MIN_PHONE_QUERY_DIGITS = 3
@@ -43,6 +44,20 @@ def list_people(
 ) -> list[dict]:
     """Every person (job applications + talent pool, merged by email/phone), most recently active first."""
     return _profiles(_people(candidates, pool_candidates), jobs_by_id)
+
+
+def find_person(
+    record_id: str,
+    candidates: list[dict],
+    jobs_by_id: dict[str, dict],
+    pool_candidates: list[dict] | None = None,
+) -> dict | None:
+    """The profile of the person that one record (application or pool entry) belongs to."""
+    group = next(
+        (g for g in _people(candidates, pool_candidates) if any(r.get("id") == record_id for r in g)),
+        None,
+    )
+    return _profiles([group], jobs_by_id)[0] if group else None
 
 
 def list_referrers(records: list[dict]) -> list[str]:
@@ -198,6 +213,7 @@ def _build_profile(records: list[dict], jobs_by_id: dict[str, dict]) -> dict:
                 {
                     "pool_id": r["id"],
                     "file_name": r.get("file_name") or "",
+                    "cv_file": cv_info(r),
                     "referred_by": _referrer(r),
                     "created_at": r.get("created_at") if isinstance(r.get("created_at"), datetime) else None,
                 }
@@ -218,6 +234,7 @@ def _build_profile(records: list[dict], jobs_by_id: dict[str, dict]) -> dict:
                 "is_completed": bool(r.get("is_completed")),
                 "referred_by": _referrer(r),
                 "file_name": r.get("file_name") or "",
+                "cv_file": cv_info(r),
                 "created_at": r.get("created_at") if isinstance(r.get("created_at"), datetime) else None,
             }
         )

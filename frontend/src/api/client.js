@@ -111,17 +111,28 @@ const uploadFiles = (url, files, onProgress, fields = {}) => {
   });
 };
 
+const putFile = (url, file) => {
+  const form = new FormData();
+  form.append('file', file);
+  return http.put(url, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+
 export const talentPoolApi = {
   list: () => http.get('/api/talent-pool'),
   upload: (files, onProgress, fields) => uploadFiles('/api/talent-pool/upload', files, onProgress, fields),
   create: (data) => http.post('/api/talent-pool', data),
   update: (id, data) => http.patch(`/api/talent-pool/${id}`, data),
   remove: (id) => http.delete(`/api/talent-pool/${id}`),
+  /* Original CV file (404 when none was stored) */
+  getCv: (id) => http.get(`/api/talent-pool/${id}/cv`, { responseType: 'blob' }),
+  attachCv: (id, file) => putFile(`/api/talent-pool/${id}/cv`, file),
 };
 
 export const searchApi = {
   /* Every person (job applications + talent pool merged by email/phone), newest activity first */
   people: () => http.get('/api/candidates'),
+  /* One person's merged profile, found by any of their record ids (application or pool entry) */
+  person: (recordId) => http.get(`/api/candidates/by-record/${recordId}`),
   /* Referrer names used so far, most used first (autocomplete) */
   referrers: () => http.get('/api/candidates/referrers'),
   /* Global search across all jobs; returns merged person profiles */
@@ -224,4 +235,9 @@ export const candidatesApi = {
 
   remove: (jobId, candidateId) =>
     http.delete(`/api/jobs/${jobId}/candidates/${candidateId}`),
+
+  /* Original CV file (404 when none was stored) */
+  getCv: (jobId, candidateId) =>
+    http.get(`/api/jobs/${jobId}/candidates/${candidateId}/cv`, { responseType: 'blob' }),
+  attachCv: (jobId, candidateId, file) => putFile(`/api/jobs/${jobId}/candidates/${candidateId}/cv`, file),
 };

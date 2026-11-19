@@ -9,6 +9,8 @@ from app.models.candidate import (
     REFERRER_MAX_LENGTH,
     CandidateBase,
     CandidateManualBase,
+    CvFileInfo,
+    _public_cv,
     clean_referrer,
 )
 
@@ -30,7 +32,11 @@ class TalentPoolCandidateResponse(CandidateBase):
 
     id: str
     file_name: str = ""
+    # None: no stored file (manual entry, or uploaded before CV files were kept)
+    cv_file: Optional[CvFileInfo] = None
     created_at: datetime
+
+    _cv = field_validator("cv_file", mode="before")(_public_cv)
 
 
 class TalentPoolUploadResult(BaseModel):

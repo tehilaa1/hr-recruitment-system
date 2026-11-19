@@ -1,4 +1,4 @@
-import { Baby, Briefcase, Library, Users, Wallet } from 'lucide-react';
+import { Baby, Briefcase, Users, Wallet } from 'lucide-react';
 
 /*
  * Top-level HR modules. Drives both the home page cards and the navbar tabs,
@@ -19,24 +19,11 @@ export const HR_MODULES = [
     },
   },
   {
-    key: 'talent-pool',
-    path: '/talent-pool',
-    title: 'מאגר מועמדים',
-    description:
-      'מאגר קורות חיים כללי שאינו משויך למשרה: העלאה ופענוח אוטומטי, הוספה ידנית, חיפוש וסינון, והתאמה חכמה של מועמדים למשרות פתוחות.',
-    icon: Library,
-    accent: {
-      icon: 'bg-teal-100 text-teal-600',
-      ring: 'hover:border-teal-300 hover:shadow-teal-100',
-      cta: 'text-teal-600',
-    },
-  },
-  {
     key: 'candidates',
     path: '/candidates',
-    title: 'כל המועמדים',
+    title: 'מאגר המועמדים',
     description:
-      'כל מועמד פעם אחת – מכל המשרות וממאגר המועמדים: היסטוריית מועמדויות, סטטוס בכל משרה, ומי הביא אותו (חבר מביא חבר).',
+      'כל המועמדים במקום אחד – מהמאגר ומכל המשרות: העלאת קורות חיים ופענוח אוטומטי, צפייה בקו״ח, סינון וחיפוש, היסטוריית מועמדויות, שיוך למשרות ומי הביא כל מועמד.',
     icon: Users,
     accent: {
       icon: 'bg-indigo-100 text-indigo-600',

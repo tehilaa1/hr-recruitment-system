@@ -9,6 +9,7 @@ from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.services.budget_service import summarize_expenses
+from app.services.cv_file_service import CvFile
 from app.services.invoice_service import split_chunks
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class FirestoreService:
         if not ref.get().exists:
             return False
         for cand in ref.collection("candidates").stream():
+            self._delete_cv_chunks(cand.reference)
             cand.reference.delete()
         ref.delete()
         return True
@@ -83,16 +85,15 @@ class FirestoreService:
     # Candidates                                                           #
     # ------------------------------------------------------------------ #
 
-    def create_candidate(self, job_id: str, data: dict) -> dict:
+    def _candidate_ref(self, job_id: str, candidate_id: Optional[str] = None):
+        return self._db.collection("jobs").document(job_id).collection("candidates").document(candidate_id)
+
+    def create_candidate(self, job_id: str, data: dict, cv: Optional[CvFile] = None) -> dict:
+        """Save a job candidate (and its original CV file, if given) atomically."""
         data["job_id"] = job_id
         data["created_at"] = datetime.now(timezone.utc)
-        ref = (
-            self._db.collection("jobs")
-            .document(job_id)
-            .collection("candidates")
-            .document()
-        )
-        ref.set(data)
+        ref = self._candidate_ref(job_id)
+        self._create_with_cv(ref, data, cv)
         return {"id": ref.id, **data}
 
     def get_candidate(self, job_id: str, candidate_id: str) -> Optional[dict]:
@@ -151,10 +152,11 @@ class FirestoreService:
 
     _TALENT_POOL = "talent_pool"
 
-    def create_pool_candidate(self, data: dict) -> dict:
+    def create_pool_candidate(self, data: dict, cv: Optional[CvFile] = None) -> dict:
+        """Save a talent-pool entry (and its original CV file, if given) atomically."""
         data["created_at"] = datetime.now(timezone.utc)
         ref = self._db.collection(self._TALENT_POOL).document()
-        ref.set(data)
+        self._create_with_cv(ref, data, cv)
         return {"id": ref.id, **data}
 
     def get_pool_candidate(self, candidate_id: str) -> Optional[dict]:
@@ -181,8 +183,83 @@ class FirestoreService:
         ref = self._db.collection(self._TALENT_POOL).document(candidate_id)
         if not ref.get().exists:
             return False
+        self._delete_cv_chunks(ref)
         ref.delete()
         return True
+
+    # ------------------------------------------------------------------ #
+    # Original CV files of job candidates and talent-pool entries:          #
+    # metadata in the record's cv_file field, bytes in .../cv_chunks/{0000} #
+    # ------------------------------------------------------------------ #
+
+    _CV_CHUNKS = "cv_chunks"
+
+    def _create_with_cv(self, ref, data: dict, cv: Optional[CvFile]) -> None:
+        if cv is None:
+            ref.set(data)
+            return
+        data["cv_file"] = {**cv.meta, "uploaded_at": datetime.now(timezone.utc)}
+        batch = self._db.batch()
+        batch.set(ref, data)
+        self._write_chunks(batch, ref.collection(self._CV_CHUNKS), cv.data, replace=False)
+        batch.commit()
+
+    def _set_cv(self, ref, cv: CvFile) -> Optional[dict]:
+        """Attach (or replace) a record's CV in one atomic batch. None if the record doesn't exist."""
+        if not ref.get().exists:
+            return None
+        batch = self._db.batch()
+        self._write_chunks(batch, ref.collection(self._CV_CHUNKS), cv.data)
+        batch.update(ref, {"cv_file": {**cv.meta, "uploaded_at": datetime.now(timezone.utc)}})
+        batch.commit()
+        return {"id": ref.id, **ref.get().to_dict()}
+
+    def _get_cv(self, ref) -> Optional[CvFile]:
+        doc = ref.get()
+        meta = (doc.to_dict() or {}).get("cv_file") if doc.exists else None
+        if not isinstance(meta, dict):
+            return None
+        data = self._read_chunks(ref.collection(self._CV_CHUNKS))
+        if len(data) != meta.get("size"):
+            logger.error("CV of %s is incomplete (%s of %s bytes)", ref.id, len(data), meta.get("size"))
+            return None
+        return CvFile(meta=meta, data=data)
+
+    def get_candidate_cv(self, job_id: str, candidate_id: str) -> Optional[CvFile]:
+        return self._get_cv(self._candidate_ref(job_id, candidate_id))
+
+    def set_candidate_cv(self, job_id: str, candidate_id: str, cv: CvFile) -> Optional[dict]:
+        return self._set_cv(self._candidate_ref(job_id, candidate_id), cv)
+
+    def get_pool_cv(self, candidate_id: str) -> Optional[CvFile]:
+        return self._get_cv(self._db.collection(self._TALENT_POOL).document(candidate_id))
+
+    def set_pool_cv(self, candidate_id: str, cv: CvFile) -> Optional[dict]:
+        return self._set_cv(self._db.collection(self._TALENT_POOL).document(candidate_id), cv)
+
+    @classmethod
+    def _delete_cv_chunks(cls, record_ref) -> None:
+        for chunk in record_ref.collection(cls._CV_CHUNKS).list_documents():
+            chunk.delete()
+
+    @staticmethod
+    def _write_chunks(batch, chunks_col, data: bytes, replace: bool = True) -> None:
+        """Queue the file's chunks; same ids are overwritten, leftovers of a longer old file
+        deleted (replace=False skips that lookup for a brand-new record)."""
+        chunks = split_chunks(data)
+        for old in chunks_col.list_documents() if replace else ():  # references only, no file bytes
+            if not old.id.isdigit() or int(old.id) >= len(chunks):
+                batch.delete(old)
+        for i, part in enumerate(chunks):
+            batch.set(chunks_col.document(f"{i:04d}"), {"index": i, "data": part})
+
+    @staticmethod
+    def _read_chunks(chunks_col) -> bytes:
+        parts = sorted(
+            (d.to_dict() or {} for d in chunks_col.stream()),
+            key=lambda c: int(c.get("index") or 0),
+        )
+        return b"".join(bytes(c.get("data") or b"") for c in parts)
 
     # ------------------------------------------------------------------ #
     # Annual budgets: annual_budgets/{year} + events subcollection         #
@@ -319,15 +396,8 @@ class FirestoreService:
         ref = self._expense_ref(year, event_id, expense_id)
         if not ref.get().exists:
             return None
-        chunks = split_chunks(data)
-        chunks_col = ref.collection("invoice_chunks")
         batch = self._db.batch()
-        # Same ids are overwritten by set(); only leftovers of a longer old file are deleted
-        for old in chunks_col.list_documents():  # references only, no file bytes
-            if not old.id.isdigit() or int(old.id) >= len(chunks):
-                batch.delete(old)
-        for i, part in enumerate(chunks):
-            batch.set(chunks_col.document(f"{i:04d}"), {"index": i, "data": part})
+        self._write_chunks(batch, ref.collection("invoice_chunks"), data)
         now = datetime.now(timezone.utc)
         batch.update(ref, {"invoice_file": {**meta, "uploaded_at": now}, "updated_at": now})
         batch.commit()
@@ -342,11 +412,7 @@ class FirestoreService:
         meta = (doc.to_dict() or {}).get("invoice_file") if doc.exists else None
         if not isinstance(meta, dict):
             return None
-        parts = sorted(
-            (d.to_dict() or {} for d in ref.collection("invoice_chunks").stream()),
-            key=lambda c: int(c.get("index") or 0),
-        )
-        data = b"".join(bytes(c.get("data") or b"") for c in parts)
+        data = self._read_chunks(ref.collection("invoice_chunks"))
         if len(data) != meta.get("size"):
             logger.error("Invoice of expense %s is incomplete (%s of %s bytes)", expense_id, len(data), meta.get("size"))
             return None
@@ -480,13 +546,9 @@ class FirestoreService:
         return data
 
     def delete_candidate(self, job_id: str, candidate_id: str) -> bool:
-        ref = (
-            self._db.collection("jobs")
-            .document(job_id)
-            .collection("candidates")
-            .document(candidate_id)
-        )
+        ref = self._candidate_ref(job_id, candidate_id)
         if not ref.get().exists:
             return False
+        self._delete_cv_chunks(ref)
         ref.delete()
         return True

@@ -3,11 +3,17 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import status as http_status
 
 from app.dependencies import get_firestore_service
 from app.models.candidate import CandidateProfile
-from app.services.candidate_search_service import list_people, list_referrers, search_candidates
+from app.services.candidate_search_service import (
+    find_person,
+    list_people,
+    list_referrers,
+    search_candidates,
+)
 from app.services.firestore_service import FirestoreService
 
 router = APIRouter(prefix="/api/candidates", tags=["Global Candidates"])
@@ -52,6 +58,19 @@ async def global_candidate_search(
     candidates, jobs, pool = await _load_all(db)
     jobs_by_id = {j["id"]: j for j in jobs}
     return search_candidates(q, candidates, jobs_by_id, limit=limit, pool_candidates=pool)
+
+
+@router.get("/by-record/{record_id}", response_model=CandidateProfile)
+async def person_by_record(record_id: str, db: DB):
+    """The merged profile of the person owning this record (a job-candidate or talent-pool id).
+
+    Lets the UI refresh one profile after editing, assigning or removing one of its records.
+    """
+    candidates, jobs, pool = await _load_all(db)
+    profile = find_person(record_id, candidates, {j["id"]: j for j in jobs}, pool_candidates=pool)
+    if profile is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "המועמד לא נמצא")
+    return profile
 
 
 async def _load_all(db: FirestoreService):
