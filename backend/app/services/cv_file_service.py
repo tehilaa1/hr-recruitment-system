@@ -125,13 +125,14 @@ def cv_response(cv: Optional[CvFile]) -> Response:
     )
 
 
-async def read_cv_upload(file: UploadFile) -> CvFile:
+async def read_cv_upload(file: UploadFile, max_bytes: int = CV_MAX_BYTES) -> CvFile:
     """Validate an uploaded CV for attaching to an existing record."""
-    data = await file.read(CV_MAX_BYTES + 1)
-    if len(data) > CV_MAX_BYTES:
+    max_bytes = min(max_bytes, CV_MAX_BYTES)
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
         raise HTTPException(
             http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"הקובץ גדול מדי (עד {CV_MAX_BYTES // (1024 * 1024)}MB)",
+            f"הקובץ גדול מדי (עד {max_bytes // (1024 * 1024)}MB)",
         )
     if not data:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "הקובץ ריק")

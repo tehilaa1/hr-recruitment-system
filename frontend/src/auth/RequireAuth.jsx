@@ -4,7 +4,7 @@ import { useAuth } from './AuthContext';
 
 /* Route guard: renders child routes only for authorized users (optionally with a given role) */
 export default function RequireAuth({ role }) {
-  const { profile, loading } = useAuth();
+  const { profile, loading, isAdmin } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -17,7 +17,7 @@ export default function RequireAuth({ role }) {
   if (!profile) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
-  if (role && profile.role !== role) {
+  if (role && (profile.role !== role || (role === 'admin' && !isAdmin))) {
     return <Navigate to="/" replace />;
   }
   return <Outlet />;

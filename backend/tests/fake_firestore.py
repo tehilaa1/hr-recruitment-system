@@ -1,5 +1,5 @@
 """In-memory stand-in for the Firestore client, covering only what FirestoreService
-uses in the tests (documents, subcollections, batches, order_by, collection_group).
+uses in the tests (documents, subcollections, batches, order_by, where, collection_group).
 
     db = FirestoreService.__new__(FirestoreService)   # skips Firebase initialization
     db._db = FakeFirestore()
@@ -33,8 +33,10 @@ class _Doc:
         return _Snap(self, self._store.get(self.path))
 
     def create(self, data):
+        from google.api_core.exceptions import AlreadyExists
+
         if self.path in self._store:
-            raise ValueError("exists")
+            raise AlreadyExists("exists")
         self.set(data)
 
     def set(self, data):
@@ -51,12 +53,34 @@ class _Doc:
     def collection(self, name):
         return _Col(self._store, self.path + (name,))
 
+    def collections(self):
+        n = len(self.path) + 1
+        names = sorted({p[n - 1] for p in self._store if len(p) > n and p[: n - 1] == self.path})
+        return [_Col(self._store, self.path + (name,)) for name in names]
+
+
+class _Filtered:
+    """A query with where(filter=FieldFilter(...)) clauses (only "==" is used)."""
+
+    def __init__(self, source, filters):
+        self._source, self._filters = source, filters
+
+    def where(self, filter=None):
+        assert filter.op_string == "==", filter.op_string
+        return _Filtered(self._source, self._filters + [filter])
+
+    def stream(self):
+        return [
+            s for s in self._source()
+            if all((s.to_dict() or {}).get(f.field_path) == f.value for f in self._filters)
+        ]
+
 
 class _Col:
     _next = 0
 
     def __init__(self, store, path):
-        self._store, self.path = store, path
+        self._store, self.path, self.id = store, path, path[-1]
 
     @property
     def parent(self):
@@ -74,6 +98,9 @@ class _Col:
 
     def stream(self):
         return [d.get() for d in self.list_documents()]
+
+    def where(self, filter=None):
+        return _Filtered(self.stream, []).where(filter=filter)
 
     def order_by(self, field, direction=None):
         return _Ordered(self.stream, field, descending=str(direction).upper().endswith("DESCENDING"))
@@ -95,6 +122,9 @@ class _Group:
 
     def stream(self):
         return [_Doc(self._store, p).get() for p in sorted(self._store) if len(p) % 2 == 0 and p[-2] == self._name]
+
+    def where(self, filter=None):
+        return _Filtered(self.stream, []).where(filter=filter)
 
 
 class _Batch:
@@ -130,6 +160,25 @@ class FakeFirestore:
 
     def chunk_paths(self):
         return sorted(p for p in self.store if "invoice_chunks" in p)
+
+
+TENANT = "tenant-a"
+
+
+def member(tenant: str = TENANT, email: str = "user@a.com", role: str = "admin", **flags):
+    """A CurrentUser of `tenant`, for app.dependency_overrides[get_current_user]."""
+    from app.security import CurrentUser
+
+    return CurrentUser(uid=f"uid-{email}", email=email, role=role, tenant_id=tenant, **flags)
+
+
+def sign_in(app, user=None):
+    """Make every request of `app` come from `user` (default: an admin of TENANT)."""
+    from app.security import get_current_user
+
+    user = user or member()
+    app.dependency_overrides[get_current_user] = lambda: user
+    return user
 
 
 def fake_service():

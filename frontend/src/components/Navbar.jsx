@@ -1,16 +1,30 @@
-import { Briefcase } from 'lucide-react';
+import { Briefcase, FlaskConical } from 'lucide-react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
 import { HR_MODULES } from '../constants/modules';
 import GlobalSearch from './GlobalSearch';
 import UserMenu from './UserMenu';
 
 export default function Navbar() {
   const { pathname } = useLocation();
+  const { isDemo } = useAuth();
   // Global candidate search (jobs + talent pool) belongs to the candidate modules
   const showSearch = ['/jobs', '/candidates'].some((p) => pathname.startsWith(p));
 
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
+      {isDemo && (
+        <div
+          role="status"
+          className="bg-amber-50 border-b border-amber-200 text-amber-800 text-xs sm:text-sm px-4 py-1.5 flex items-center justify-center gap-2 text-center"
+        >
+          <FlaskConical className="h-4 w-4 flex-shrink-0" />
+          <span>
+            <strong className="font-semibold">סביבת הדגמה</strong> – כל הנתונים בדויים ומשותפים לכל המבקרים, ומתאפסים מעת לעת.
+            אין להזין מידע אמיתי.
+          </span>
+        </div>
+      )}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center h-16 gap-4">
           <Link to="/" className="flex items-center gap-2 flex-shrink-0" title="דף הבית">

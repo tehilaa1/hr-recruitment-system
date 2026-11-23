@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import RoleBadge from './RoleBadge';
 
 export default function UserMenu() {
-  const { profile, isAdmin, logout } = useAuth();
+  const { profile, isAdmin, isDemo, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -52,14 +52,17 @@ export default function UserMenu() {
               ניהול משתמשים
             </Link>
           )}
-          <Link
-            to={`/reset-password?email=${encodeURIComponent(profile.email)}`}
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            <KeyRound className="h-4 w-4 text-gray-400" />
-            שינוי סיסמה (אימות SMS)
-          </Link>
+          {/* The demo account's password is shared: it can't be changed */}
+          {!isDemo && (
+            <Link
+              to={`/reset-password?email=${encodeURIComponent(profile.email)}`}
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <KeyRound className="h-4 w-4 text-gray-400" />
+              שינוי סיסמה (אימות SMS)
+            </Link>
+          )}
           <button
             type="button"
             onClick={logout}

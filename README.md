@@ -140,6 +140,38 @@ Key architectural points:
 - After sign-in, the frontend calls `/api/auth/me`. If the user isn't on the allow-list, the app shows *"אין הרשאת גישה"* and signs them out. Any later 401 signs the user out automatically.
 - **First admin:** created from the server with `backend/scripts/create_admin.py` (see [Getting started](#getting-started-local-development)). There is no self-registration.
 
+### 6. Workspaces (multi-tenancy) & the public demo
+- **Every record belongs to one workspace.** Jobs, job candidates, talent-pool entries, CV files, maternity records, budgets (with events, expenses and invoices) and settings carry `owner_id = <tenant id>`. Every `users/{email}` document has a `tenant_id`, and `CurrentUser.tenant_id` is passed to every `FirestoreService` call.
+  - Lists filter with `where owner_id == tenant`.
+  - Reads, updates and deletes of another workspace's record (or a legacy record with no owner) behave as **404**, so they never reveal that the record exists.
+  - Writes always stamp the caller's tenant, and `owner_id` can never be changed by an update.
+  - Users without a `tenant_id` get **403**.
+- **Teams.** A workspace admin adds editors/admins at `/admin/users`. New users always join the admin's own workspace: the backend sets `tenant_id` itself and ignores the request. Users of other workspaces look like missing users (404).
+- **New workspaces** can only be created by a **super admin** (`is_super_admin: true`, set only by the CLI scripts):
+  - in the app, via `POST /api/admin/tenants` (Swagger at `/docs`)
+  - from the server, with `python scripts/create_admin.py owner@acme.com --new-workspace "Acme"`
+
+  Being a super admin gives **no** access to other workspaces' data.
+- **Budgets and settings** are stored at `annual_budgets/{tenant}__{year}` and `settings/{tenant}__{name}`, so each workspace can have its own 2026 budget.
+- **Demo workspace** (`DEMO_TENANT_ID`, default `demo`):
+  - **Account and data.** It's a shared `editor` account (`DEMO_EMAIL` / `DEMO_PASSWORD`). Running `python scripts/seed_demo_data.py` creates the account and seeds sample Hebrew data:
+    - 14 people with PDF CVs
+    - 5 jobs with applications in various statuses and referrers
+    - a talent pool
+    - two budget years with events and expenses
+    - maternity records
+  - **Seeding is idempotent.** `--reset` (or `POST /api/admin/demo/reset` as super admin) wipes only `owner_id == demo` data and seeds again.
+  - **Locked down.** The demo account can't manage users or reset or change its password.
+  - **Free-tier limits** (demo only):
+    - `DEMO_AI_DAILY_LIMIT` Gemini calls per day (in-memory, resets on restart)
+    - `DEMO_MAX_FILES_PER_UPLOAD` files per batch
+    - `DEMO_MAX_UPLOAD_BYTES` per file
+    - `DEMO_MAX_RECORDS` per module
+  - **Frontend.** When `VITE_DEMO_EMAIL` and `VITE_DEMO_PASSWORD` are set, the login page shows *כניסה לחשבון הדגמה*, and a sandbox banner is shown while signed in as the demo account.
+  - **CV assets.** The sample CVs are committed under `backend/app/demo_assets/cvs/`. Regenerate them only when the demo people change, with `scripts/generate_demo_cvs.py` (a dev tool that needs `fpdf2` and `uharfbuzz` in a separate venv, plus the OFL font Rubik).
+- **Firestore index:** global search runs a collection-group query on `candidates.owner_id`. Deploy `firestore.indexes.json` (or create the single-field collection-group exemption in the console, Firestore → Indexes → Single field) before using `/candidates`.
+- **Migrating pre-multi-tenant data:** `scripts/migrate_owner_ids.py` assigns everything without an owner to your workspace (your Firebase uid). It's a dry run by default; see the script's docstring.
+
 ---
 
 ## Data model (Firestore)
@@ -360,6 +392,13 @@ npm run dev
 | `GEMINI_FALLBACK_MODELS` | see `config.py` | JSON list of models tried on 503/404 (`[]` disables) |
 | `GEMINI_RETRIES_PER_MODEL` | `2` | Retries per model before falling back |
 | `CORS_ORIGINS` | `["http://localhost:5173","http://localhost:3000"]` | Allowed frontend origins (JSON list) |
+| `DEMO_EMAIL` | `demo@hiretrack.app` | Login of the public demo account |
+| `DEMO_PASSWORD` | — | Demo password. Only needed by `scripts/seed_demo_data.py`. Must equal the frontend's `VITE_DEMO_PASSWORD` |
+| `DEMO_TENANT_ID` | `demo` | Workspace id of the demo |
+| `DEMO_AI_DAILY_LIMIT` | `20` | Gemini calls per day for the demo |
+| `DEMO_MAX_UPLOAD_BYTES` | `2097152` | Max file size for the demo |
+| `DEMO_MAX_FILES_PER_UPLOAD` | `5` | Max files per demo upload batch |
+| `DEMO_MAX_RECORDS` | `150` | Max records per module in the demo |
 
 ### Frontend (`frontend/.env`, template: `frontend/.env.example`)
 
@@ -371,6 +410,7 @@ npm run dev
 | `VITE_FIREBASE_APP_ID` | recommended | Firebase web app ID |
 | `VITE_API_BASE_URL` | `http://localhost:8000` | Backend base URL |
 | `VITE_OUTLOOK_BASE_URL` | `https://outlook.office.com` | Outlook on the web host. Use `https://outlook.live.com` for personal Outlook.com accounts |
+| `VITE_DEMO_EMAIL` / `VITE_DEMO_PASSWORD` | — | Optional. Shows the demo login button. **Bundled into the public JS**, so use them only for the sandbox demo account |
 
 The Firebase web config values are **public identifiers, not secrets**. Security is enforced by the backend's token verification and allow-list.
 
@@ -389,7 +429,16 @@ python tests/test_budgets.py
 python tests/test_exports.py
 python tests/test_invoices.py
 python tests/test_referrals.py
+python tests/test_tenant_isolation.py
 ```
+
+- `test_tenant_isolation.py` runs the real app (real auth dependency, stubbed Firebase) with workspaces A, B and the demo. It checks that:
+  - A can't list, read, update, delete or download B's jobs, candidates, CVs, pool entries, maternity records, settings, budget events, expenses or invoices
+  - workspace admins only manage their own team
+  - only super admins can create workspaces or reset the demo
+  - the demo seed and reset never touch other workspaces
+  - the demo quotas are enforced
+  - the migration script keeps all legacy data and is idempotent
 
 - `test_status_sync.py`: the backend `VALID_STATUSES` equals the frontend `RECRUITMENT_STATUSES` (same order), every status has a badge style, and unknown statuses are rejected.
 - `test_roles_sync.py`: the backend `VALID_ROLES` equals the frontend `ROLES` (same order).

@@ -22,7 +22,7 @@ from app.models.budget import INVOICE_MAX_BYTES, ExpenseResponse  # noqa: E402
 from app.routers import budgets  # noqa: E402
 from app.services import firestore_service as fs_module  # noqa: E402
 from app.services import invoice_service  # noqa: E402
-from fake_firestore import fake_service  # noqa: E402
+from fake_firestore import TENANT, fake_service, sign_in  # noqa: E402
 from app.services.invoice_service import (  # noqa: E402
     detect_content_type,
     inline_disposition,
@@ -37,11 +37,12 @@ JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 100
 
 def _setup():
     fake, db = fake_service()
-    db.create_budget_year(2026, {"total_budget": 10000})
-    event = db.create_budget_event(2026, {"name": "חנוכה", "allocated_budget": 5000})
+    db.create_budget_year(TENANT, 2026, {"total_budget": 10000})
+    event = db.create_budget_event(TENANT, 2026, {"name": "חנוכה", "allocated_budget": 5000})
     app = FastAPI()
     app.include_router(budgets.router)
     app.dependency_overrides[get_firestore_service] = lambda: db
+    sign_in(app)
     return fake, db, TestClient(app), f"/api/budgets/2026/events/{event['id']}"
 
 
@@ -127,7 +128,7 @@ def test_upload_view_replace_and_remove():
     # Other expense fields are untouched by uploads; editing keeps the file
     r = client.patch(f"{base}/expenses/{expense['id']}", json={"status": "שולם"})
     assert r.json()["invoice_file"]["file_name"] == "scan.png"
-    assert db.get_budget_event(2026, base.rsplit("/", 1)[1])["actual_spent"] == 1350
+    assert db.get_budget_event(TENANT, 2026, base.rsplit("/", 1)[1])["actual_spent"] == 1350
 
     r = client.delete(url)
     assert r.status_code == 200 and r.json()["invoice_file"] is None

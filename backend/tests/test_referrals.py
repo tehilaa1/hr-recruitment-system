@@ -29,7 +29,7 @@ from app.models.candidate import (  # noqa: E402
 )
 from app.routers import candidates, jobs, search, talent_pool  # noqa: E402
 from app.services.candidate_search_service import list_people, list_referrers  # noqa: E402
-from fake_firestore import fake_service  # noqa: E402
+from fake_firestore import fake_service, sign_in  # noqa: E402
 
 FRONTEND_SRC = BACKEND_DIR.parent / "frontend" / "src"
 
@@ -50,6 +50,7 @@ def _setup():
         app.include_router(r.router)
     app.dependency_overrides[get_firestore_service] = lambda: db
     app.dependency_overrides[get_gemini_service] = lambda: _StubAI()
+    sign_in(app)
     client = TestClient(app)
     job_a = client.post("/api/jobs", json={"job_title": "מפתח/ת Python", "description": "x", "interview_type": "יחידני"}).json()["id"]
     job_b = client.post("/api/jobs", json={"job_title": "מנהל/ת מוצר", "description": "x", "interview_type": "יחידני"}).json()["id"]
