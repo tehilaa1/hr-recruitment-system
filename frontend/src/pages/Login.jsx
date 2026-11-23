@@ -21,15 +21,19 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  // The demo always starts on the home page: the remembered page belongs to whoever was
+  // signed in before (e.g. one of their jobs), which the demo workspace can't see.
+  const [demoSignIn, setDemoSignIn] = useState(false);
 
   // Already signed in and authorized → go where the user was heading
   if (profile) {
-    const from = location.state?.from;
+    const from = demoSignIn ? null : location.state?.from;
     return <Navigate to={from ? `${from.pathname}${from.search ?? ''}` : '/'} replace />;
   }
 
-  const signIn = async (signInEmail, signInPassword) => {
+  const signIn = async (signInEmail, signInPassword, isDemo = false) => {
     setSubmitting(true);
+    setDemoSignIn(isDemo);
     try {
       await login(signInEmail, signInPassword);
       // On success, AuthProvider checks authorization and this page redirects
@@ -47,7 +51,8 @@ export default function Login() {
       setError('יש להזין מייל וסיסמה');
       return;
     }
-    signIn(email, password);
+    // Typing the demo credentials by hand counts as the demo too
+    signIn(email, password, Boolean(DEMO_EMAIL) && email.trim().toLowerCase() === DEMO_EMAIL.toLowerCase());
   };
 
   // Fills in the shared demo credentials (visible to the user) and signs in
@@ -55,7 +60,7 @@ export default function Login() {
     setError('');
     setEmail(DEMO_EMAIL);
     setPassword(DEMO_PASSWORD);
-    signIn(DEMO_EMAIL, DEMO_PASSWORD);
+    signIn(DEMO_EMAIL, DEMO_PASSWORD, true);
   };
 
   // SMS-verified reset flow; carries over the email typed here
