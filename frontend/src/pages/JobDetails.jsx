@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowRight,
+  Briefcase,
   Calendar,
   Download,
   Loader2,
@@ -64,6 +65,34 @@ function LoadingPage() {
   );
 }
 
+/* The job doesn't exist (deleted, mistyped link) or belongs to another workspace:
+   the API answers 404 for both, without revealing which */
+function NotFoundPage() {
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+        <div className="max-w-md mx-auto bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center">
+          <div className="inline-flex bg-gray-100 text-gray-400 p-3 rounded-2xl mb-4">
+            <Briefcase className="h-7 w-7" />
+          </div>
+          <h1 className="text-lg font-bold text-gray-900">המשרה לא נמצאה</h1>
+          <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+            ייתכן שהמשרה נמחקה, שהקישור שגוי, או שהיא שייכת לחשבון אחר.
+          </p>
+          <Link
+            to="/jobs"
+            className="inline-flex items-center gap-1.5 mt-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"
+          >
+            <ArrowRight className="h-4 w-4" />
+            חזרה לכל המשרות
+          </Link>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function ErrorPage({ onRetry }) {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
@@ -94,7 +123,8 @@ export default function JobDetails() {
   const [job, setJob] = useState(null);
   const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
+  // null | 'not_found' (404: show "job not found") | 'error' (anything else: offer a retry)
+  const [fetchError, setFetchError] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showManualAdd, setShowManualAdd] = useState(false);
@@ -104,7 +134,7 @@ export default function JobDetails() {
 
   const fetchAll = async () => {
     setLoading(true);
-    setFetchError(false);
+    setFetchError(null);
     try {
       const [jobRes, candidatesRes] = await Promise.all([
         jobsApi.get(jobId),
@@ -112,8 +142,8 @@ export default function JobDetails() {
       ]);
       setJob(jobRes.data);
       setCandidates(candidatesRes.data);
-    } catch {
-      setFetchError(true);
+    } catch (err) {
+      setFetchError(err.response?.status === 404 ? 'not_found' : 'error');
     } finally {
       setLoading(false);
     }
@@ -234,6 +264,7 @@ export default function JobDetails() {
   const handleUploadComplete = (newCandidates) => mergeCandidates(newCandidates);
 
   if (loading) return <LoadingPage />;
+  if (fetchError === 'not_found') return <NotFoundPage />;
   if (fetchError) return <ErrorPage onRetry={fetchAll} />;
 
   return (
