@@ -28,7 +28,7 @@ from app.services.cv_file_service import (  # noqa: E402
     build_cv_file,
     detect_cv_content_type,
 )
-from fake_firestore import fake_service  # noqa: E402
+from fake_firestore import TENANT, fake_service, sign_in  # noqa: E402
 
 # Larger than one chunk, so reassembly of several chunks is exercised
 PDF_BYTES = b"%PDF-1.4\n" + bytes(range(256)) * 4000  # ~1 MB
@@ -50,6 +50,7 @@ def _setup():
         app.include_router(r.router)
     app.dependency_overrides[get_firestore_service] = lambda: db
     app.dependency_overrides[get_gemini_service] = lambda: _StubAI()
+    sign_in(app)
     client = TestClient(app)
     job = client.post("/api/jobs", json={"job_title": "מפתח/ת", "description": "x", "interview_type": "יחידני"}).json()["id"]
     return fake, client, job
@@ -134,7 +135,7 @@ def test_manual_and_legacy_records_have_no_cv():
     assert pool["cv_file"] is None
     assert client.get(f"/api/talent-pool/{pool['id']}/cv").status_code == 404
     # A record from before CV files were kept: file_name only
-    fake.store[("talent_pool", "legacy")] = {"full_name": "ותיק", "file_name": "old.pdf", "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc)}
+    fake.store[("talent_pool", "legacy")] = {"owner_id": TENANT, "full_name": "ותיק", "file_name": "old.pdf", "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc)}
     legacy = next(c for c in client.get("/api/talent-pool").json() if c["id"] == "legacy")
     assert legacy["file_name"] == "old.pdf" and legacy["cv_file"] is None
 

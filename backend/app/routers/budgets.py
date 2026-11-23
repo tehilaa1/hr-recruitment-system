@@ -39,6 +39,8 @@ from app.services.budget_service import (
     summarize_year,
 )
 from app.services.export_service import XLSX_MEDIA_TYPE, content_disposition, generate_expenses_xlsx
+from app.security import AuthUser
+from app.services.demo_limits import max_upload_bytes
 from app.services.firestore_service import FirestoreService
 from app.services.invoice_service import detect_content_type, inline_disposition, safe_file_name
 
@@ -56,19 +58,19 @@ Year = Annotated[int, Path(ge=MIN_YEAR, le=MAX_YEAR)]
 
 
 @router.get("", response_model=list[AnnualBudgetSummary])
-async def list_budget_years(db: DB):
-    years = await asyncio.to_thread(db.list_budget_years)
+async def list_budget_years(user: AuthUser, db: DB):
+    years = await asyncio.to_thread(db.list_budget_years, user.tenant_id)
     events = await asyncio.gather(
-        *(asyncio.to_thread(db.list_budget_events, y["year"]) for y in years)
+        *(asyncio.to_thread(db.list_budget_events, user.tenant_id, y["year"]) for y in years)
     )
     summaries = [summarize_year(y, ev) for y, ev in zip(years, events)]
     return sorted(summaries, key=lambda s: s["year"], reverse=True)
 
 
 @router.post("", response_model=AnnualBudgetDetail, status_code=http_status.HTTP_201_CREATED)
-async def create_budget_year(payload: AnnualBudgetCreate, db: DB):
+async def create_budget_year(payload: AnnualBudgetCreate, user: AuthUser, db: DB):
     created = await asyncio.to_thread(
-        db.create_budget_year, payload.year, payload.model_dump(exclude={"year"})
+        db.create_budget_year, user.tenant_id, payload.year, payload.model_dump(exclude={"year"})
     )
     if created is None:
         raise HTTPException(http_status.HTTP_409_CONFLICT, f"כבר קיים תקציב לשנת {payload.year}")
@@ -76,29 +78,29 @@ async def create_budget_year(payload: AnnualBudgetCreate, db: DB):
 
 
 @router.get("/{year}", response_model=AnnualBudgetDetail)
-async def get_budget_year(year: Year, db: DB):
+async def get_budget_year(year: Year, user: AuthUser, db: DB):
     budget, events = await asyncio.gather(
-        asyncio.to_thread(db.get_budget_year, year),
-        asyncio.to_thread(db.list_budget_events, year),
+        asyncio.to_thread(db.get_budget_year, user.tenant_id, year),
+        asyncio.to_thread(db.list_budget_events, user.tenant_id, year),
     )
     _assert_year(budget, year)
     return _detail(budget, events)
 
 
 @router.patch("/{year}", response_model=AnnualBudgetDetail)
-async def update_budget_year(year: Year, payload: AnnualBudgetUpdate, db: DB):
+async def update_budget_year(year: Year, payload: AnnualBudgetUpdate, user: AuthUser, db: DB):
     update = payload.model_dump(exclude_none=True)
     if not update:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
-    budget = await asyncio.to_thread(db.update_budget_year, year, update)
+    budget = await asyncio.to_thread(db.update_budget_year, user.tenant_id, year, update)
     _assert_year(budget, year)
-    events = await asyncio.to_thread(db.list_budget_events, year)
+    events = await asyncio.to_thread(db.list_budget_events, user.tenant_id, year)
     return _detail(budget, events)
 
 
 @router.delete("/{year}", status_code=http_status.HTTP_204_NO_CONTENT)
-async def delete_budget_year(year: Year, db: DB):
-    if not await asyncio.to_thread(db.delete_budget_year, year):
+async def delete_budget_year(year: Year, user: AuthUser, db: DB):
+    if not await asyncio.to_thread(db.delete_budget_year, user.tenant_id, year):
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"לא נמצא תקציב לשנת {year}")
 
 
@@ -112,35 +114,37 @@ async def delete_budget_year(year: Year, db: DB):
     response_model=BudgetEventResponse,
     status_code=http_status.HTTP_201_CREATED,
 )
-async def create_budget_event(year: Year, payload: BudgetEventCreate, db: DB):
-    _assert_year(await asyncio.to_thread(db.get_budget_year, year), year)
+async def create_budget_event(year: Year, payload: BudgetEventCreate, user: AuthUser, db: DB):
+    _assert_year(await asyncio.to_thread(db.get_budget_year, user.tenant_id, year), year)
     # mode="json" stores dates as "YYYY-MM-DD" strings (Firestore has no date-only type)
-    saved = await asyncio.to_thread(db.create_budget_event, year, payload.model_dump(mode="json"))
+    saved = await asyncio.to_thread(db.create_budget_event, user.tenant_id, year, payload.model_dump(mode="json"))
     return enrich_event(saved, year)
 
 
 @router.patch("/{year}/events/{event_id}", response_model=BudgetEventResponse)
-async def update_budget_event(year: Year, event_id: str, payload: BudgetEventUpdate, db: DB):
+async def update_budget_event(
+    year: Year, event_id: str, payload: BudgetEventUpdate, user: AuthUser, db: DB
+):
     update = payload.model_dump(mode="json", exclude_unset=True)
     if not update:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
     _reject_nulls(update, ("name", "allocated_budget", "actual_spent", "status", "notes"))
     if "actual_spent" in update:
         # With itemized expenses, actual_spent is derived from them and can't be set by hand
-        event = await asyncio.to_thread(db.get_budget_event, year, event_id)
+        event = await asyncio.to_thread(db.get_budget_event, user.tenant_id, year, event_id)
         if event and int(event.get("expenses_count") or 0) > 0:
             update.pop("actual_spent")
     if not update:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
-    saved = await asyncio.to_thread(db.update_budget_event, year, event_id, update)
+    saved = await asyncio.to_thread(db.update_budget_event, user.tenant_id, year, event_id, update)
     if saved is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "האירוע לא נמצא")
     return enrich_event(saved, year)
 
 
 @router.delete("/{year}/events/{event_id}", status_code=http_status.HTTP_204_NO_CONTENT)
-async def delete_budget_event(year: Year, event_id: str, db: DB):
-    if not await asyncio.to_thread(db.delete_budget_event, year, event_id):
+async def delete_budget_event(year: Year, event_id: str, user: AuthUser, db: DB):
+    if not await asyncio.to_thread(db.delete_budget_event, user.tenant_id, year, event_id):
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "האירוע לא נמצא")
 
 
@@ -152,10 +156,10 @@ _EXPENSE_NOT_FOUND = "פריט ההוצאה לא נמצא"
 
 
 @router.get("/{year}/events/{event_id}/expenses", response_model=list[ExpenseResponse])
-async def list_event_expenses(year: Year, event_id: str, db: DB):
+async def list_event_expenses(year: Year, event_id: str, user: AuthUser, db: DB):
     event, expenses = await asyncio.gather(
-        asyncio.to_thread(db.get_budget_event, year, event_id),
-        asyncio.to_thread(db.list_event_expenses, year, event_id),
+        asyncio.to_thread(db.get_budget_event, user.tenant_id, year, event_id),
+        asyncio.to_thread(db.list_event_expenses, user.tenant_id, year, event_id),
     )
     _assert_event(event)
     return sort_expenses(expenses)
@@ -166,21 +170,23 @@ async def list_event_expenses(year: Year, event_id: str, db: DB):
     response_model=ExpenseResponse,
     status_code=http_status.HTTP_201_CREATED,
 )
-async def create_event_expense(year: Year, event_id: str, payload: ExpenseCreate, db: DB):
-    saved = await asyncio.to_thread(db.create_event_expense, year, event_id, payload.model_dump())
+async def create_event_expense(
+    year: Year, event_id: str, payload: ExpenseCreate, user: AuthUser, db: DB
+):
+    saved = await asyncio.to_thread(db.create_event_expense, user.tenant_id, year, event_id, payload.model_dump())
     _assert_event(saved)
     return saved
 
 
 @router.patch("/{year}/events/{event_id}/expenses/{expense_id}", response_model=ExpenseResponse)
 async def update_event_expense(
-    year: Year, event_id: str, expense_id: str, payload: ExpenseUpdate, db: DB
+    year: Year, event_id: str, expense_id: str, payload: ExpenseUpdate, user: AuthUser, db: DB
 ):
     update = payload.model_dump(exclude_unset=True)
     _reject_nulls(update, ("item_name", "quantity", "total_price", "status", "notes", "invoice_reference"))
     if not update:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
-    saved = await asyncio.to_thread(db.update_event_expense, year, event_id, expense_id, update)
+    saved = await asyncio.to_thread(db.update_event_expense, user.tenant_id, year, event_id, expense_id, update)
     if saved is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
     return saved
@@ -189,8 +195,8 @@ async def update_event_expense(
 @router.delete(
     "/{year}/events/{event_id}/expenses/{expense_id}", status_code=http_status.HTTP_204_NO_CONTENT
 )
-async def delete_event_expense(year: Year, event_id: str, expense_id: str, db: DB):
-    if not await asyncio.to_thread(db.delete_event_expense, year, event_id, expense_id):
+async def delete_event_expense(year: Year, event_id: str, expense_id: str, user: AuthUser, db: DB):
+    if not await asyncio.to_thread(db.delete_event_expense, user.tenant_id, year, event_id, expense_id):
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
 
 
@@ -200,14 +206,15 @@ _NO_INVOICE = "לא צורף קובץ חשבונית"
 
 @router.put(_INVOICE_PATH, response_model=ExpenseResponse)
 async def upload_expense_invoice(
-    year: Year, event_id: str, expense_id: str, db: DB, file: UploadFile = File(...)
+    year: Year, event_id: str, expense_id: str, user: AuthUser, db: DB, file: UploadFile = File(...)
 ):
     """Attach (or replace) the expense's invoice: PDF, PNG or JPG up to 5 MB."""
-    data = await file.read(INVOICE_MAX_BYTES + 1)
-    if len(data) > INVOICE_MAX_BYTES:
+    max_bytes = max_upload_bytes(user, INVOICE_MAX_BYTES)
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
         raise HTTPException(
             http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"הקובץ גדול מדי (עד {INVOICE_MAX_BYTES // (1024 * 1024)}MB)",
+            f"הקובץ גדול מדי (עד {max_bytes // (1024 * 1024)}MB)",
         )
     if not data:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "הקובץ ריק")
@@ -221,15 +228,15 @@ async def upload_expense_invoice(
         "content_type": content_type,
         "size": len(data),
     }
-    saved = await asyncio.to_thread(db.set_expense_invoice, year, event_id, expense_id, meta, data)
+    saved = await asyncio.to_thread(db.set_expense_invoice, user.tenant_id, year, event_id, expense_id, meta, data)
     if saved is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
     return saved
 
 
 @router.get(_INVOICE_PATH)
-async def get_expense_invoice(year: Year, event_id: str, expense_id: str, db: DB):
-    found = await asyncio.to_thread(db.get_expense_invoice, year, event_id, expense_id)
+async def get_expense_invoice(year: Year, event_id: str, expense_id: str, user: AuthUser, db: DB):
+    found = await asyncio.to_thread(db.get_expense_invoice, user.tenant_id, year, event_id, expense_id)
     if found is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, _NO_INVOICE)
     meta, data = found
@@ -245,18 +252,20 @@ async def get_expense_invoice(year: Year, event_id: str, expense_id: str, db: DB
 
 
 @router.delete(_INVOICE_PATH, response_model=ExpenseResponse)
-async def delete_expense_invoice(year: Year, event_id: str, expense_id: str, db: DB):
-    saved = await asyncio.to_thread(db.delete_expense_invoice, year, event_id, expense_id)
+async def delete_expense_invoice(
+    year: Year, event_id: str, expense_id: str, user: AuthUser, db: DB
+):
+    saved = await asyncio.to_thread(db.delete_expense_invoice, user.tenant_id, year, event_id, expense_id)
     if saved is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, _EXPENSE_NOT_FOUND)
     return saved
 
 
 @router.get("/{year}/events/{event_id}/export-excel")
-async def export_event_expenses_excel(year: Year, event_id: str, db: DB):
+async def export_event_expenses_excel(year: Year, event_id: str, user: AuthUser, db: DB):
     event, expenses = await asyncio.gather(
-        asyncio.to_thread(db.get_budget_event, year, event_id),
-        asyncio.to_thread(db.list_event_expenses, year, event_id),
+        asyncio.to_thread(db.get_budget_event, user.tenant_id, year, event_id),
+        asyncio.to_thread(db.list_event_expenses, user.tenant_id, year, event_id),
     )
     _assert_event(event)
     event = enrich_event(event, year)

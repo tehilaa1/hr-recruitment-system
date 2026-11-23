@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.dependencies import get_firestore_service
-from app.routers import budgets, candidates, jobs, maternity, search, talent_pool, users
+from app.routers import admin, budgets, candidates, jobs, maternity, search, talent_pool, users
 from app.security import require_member
 
 logging.basicConfig(
@@ -48,9 +48,11 @@ app.include_router(talent_pool.router, dependencies=_members_only)
 app.include_router(budgets.router, dependencies=_members_only)
 
 # Auth/users routers enforce their own rules (public password reset,
-# any member for /me, admin for /api/users)
+# any member for /me, workspace admin for /api/users)
 app.include_router(users.auth_router)
 app.include_router(users.router)
+# Super admins only (enforced per endpoint via SuperAdminUser)
+app.include_router(admin.router)
 
 
 _firebase_error: str | None = None

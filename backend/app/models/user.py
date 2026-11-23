@@ -95,6 +95,14 @@ class UserResponse(BaseModel):
     uid: Optional[str] = None
     created_at: Optional[datetime] = None
     created_by: Optional[str] = None
+    tenant_id: Optional[str] = None
+
+
+class MeResponse(UserResponse):
+    """The signed-in user, plus the flags the UI needs."""
+    is_super_admin: bool = False
+    # Signed in to the shared public demo workspace (the UI shows a sandbox banner)
+    is_demo: bool = False
 
 
 class UserCreateResult(BaseModel):

@@ -1,6 +1,28 @@
+"""Firestore access layer.
+
+Multi-tenancy
+-------------
+Every business record belongs to exactly one workspace (tenant). Each method
+takes the caller's ``owner_id`` (= ``CurrentUser.tenant_id``) and:
+
+  * stamps it on new top-level records (and on job candidates, so the
+    collection-group query can filter them),
+  * filters list queries with ``where owner_id == ...``,
+  * treats a record whose ``owner_id`` differs as missing (None / False), so
+    the routers answer 404 and never reveal that another tenant's id exists.
+
+Records without the field (legacy data before the migration) belong to nobody
+and are invisible until ``scripts/migrate_owner_ids.py`` assigns them.
+
+Documents whose id used to be global (one budget per year, one settings doc
+per name) are namespaced by tenant: ``annual_budgets/{owner}__{year}`` and
+``settings/{owner}__{name}``. Everything under them (events, expenses,
+invoice chunks) is reachable only through that owner-prefixed path.
+"""
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional, Union
 
@@ -13,6 +35,23 @@ from app.services.cv_file_service import CvFile
 from app.services.invoice_service import split_chunks
 
 logger = logging.getLogger(__name__)
+
+OWNER_FIELD = "owner_id"
+# Tenant ids are generated server-side (a Firebase uid, "demo", or a slug from
+# the create-workspace CLI). Never "/" (would escape the document path) or "__".
+_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def check_owner_id(owner_id) -> str:
+    """Guard against an empty/None owner matching legacy records that have no owner_id."""
+    if not isinstance(owner_id, str) or not _TENANT_ID_RE.match(owner_id):
+        raise ValueError(f"Invalid tenant id: {owner_id!r}")
+    return owner_id
+
+
+def _newest_first(records: list[dict]) -> list[dict]:
+    return sorted(records, key=lambda r: r.get("created_at") or _EPOCH, reverse=True)
 
 
 class FirestoreService:
@@ -33,38 +72,66 @@ class FirestoreService:
         self._db = firestore.client()
 
     # ------------------------------------------------------------------ #
-    # Jobs                                                                 #
+    # Tenant helpers                                                       #
     # ------------------------------------------------------------------ #
 
-    def create_job(self, data: dict) -> dict:
-        data["created_at"] = datetime.now(timezone.utc)
-        ref = self._db.collection("jobs").document()
-        ref.set(data)
-        return {"id": ref.id, **data}
-
-    def get_job(self, job_id: str) -> Optional[dict]:
-        doc = self._db.collection("jobs").document(job_id).get()
-        return {"id": doc.id, **doc.to_dict()} if doc.exists else None
-
-    def list_jobs(self) -> list[dict]:
-        docs = (
-            self._db.collection("jobs")
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
-        return [{"id": d.id, **d.to_dict()} for d in docs]
-
-    def update_job(self, job_id: str, data: dict) -> Optional[dict]:
-        ref = self._db.collection("jobs").document(job_id)
-        if not ref.get().exists:
+    @staticmethod
+    def _owned(ref, owner_id: str):
+        """The snapshot if the document exists and belongs to owner_id, else None."""
+        check_owner_id(owner_id)
+        snap = ref.get()
+        if not snap.exists or (snap.to_dict() or {}).get(OWNER_FIELD) != owner_id:
             return None
+        return snap
+
+    def _owned_query(self, query, owner_id: str):
+        return query.where(filter=FieldFilter(OWNER_FIELD, "==", check_owner_id(owner_id)))
+
+    def _list_owned(self, collection: str, owner_id: str) -> list[dict]:
+        docs = self._owned_query(self._db.collection(collection), owner_id).stream()
+        return _newest_first([{"id": d.id, **d.to_dict()} for d in docs])
+
+    def _create_owned(self, collection: str, owner_id: str, data: dict) -> tuple:
+        ref = self._db.collection(collection).document()
+        data = {**data, OWNER_FIELD: check_owner_id(owner_id)}
+        return ref, data
+
+    def _update_owned(self, ref, owner_id: str, data: dict) -> Optional[dict]:
+        if self._owned(ref, owner_id) is None:
+            return None
+        data = {k: v for k, v in data.items() if k != OWNER_FIELD}  # ownership never changes
         ref.update(data)
         updated = ref.get()
         return {"id": updated.id, **updated.to_dict()}
 
-    def delete_job(self, job_id: str) -> bool:
-        ref = self._db.collection("jobs").document(job_id)
-        if not ref.get().exists:
+    # ------------------------------------------------------------------ #
+    # Jobs                                                                 #
+    # ------------------------------------------------------------------ #
+
+    _JOBS = "jobs"
+
+    def _job_ref(self, job_id: str):
+        return self._db.collection(self._JOBS).document(job_id)
+
+    def create_job(self, owner_id: str, data: dict) -> dict:
+        data["created_at"] = datetime.now(timezone.utc)
+        ref, data = self._create_owned(self._JOBS, owner_id, data)
+        ref.set(data)
+        return {"id": ref.id, **data}
+
+    def get_job(self, owner_id: str, job_id: str) -> Optional[dict]:
+        snap = self._owned(self._job_ref(job_id), owner_id)
+        return {"id": snap.id, **snap.to_dict()} if snap else None
+
+    def list_jobs(self, owner_id: str) -> list[dict]:
+        return self._list_owned(self._JOBS, owner_id)
+
+    def update_job(self, owner_id: str, job_id: str, data: dict) -> Optional[dict]:
+        return self._update_owned(self._job_ref(job_id), owner_id, data)
+
+    def delete_job(self, owner_id: str, job_id: str) -> bool:
+        ref = self._job_ref(job_id)
+        if self._owned(ref, owner_id) is None:
             return False
         for cand in ref.collection("candidates").stream():
             self._delete_cv_chunks(cand.reference)
@@ -72,53 +139,65 @@ class FirestoreService:
         ref.delete()
         return True
 
-    def get_candidate_count(self, job_id: str) -> int:
-        docs = (
-            self._db.collection("jobs")
-            .document(job_id)
-            .collection("candidates")
-            .stream()
-        )
-        return sum(1 for _ in docs)
+    def get_candidate_count(self, owner_id: str, job_id: str) -> int:
+        if self._owned(self._job_ref(job_id), owner_id) is None:
+            return 0
+        docs = self._job_ref(job_id).collection("candidates").stream()
+        return sum(1 for d in docs if (d.to_dict() or {}).get(OWNER_FIELD) == owner_id)
 
     # ------------------------------------------------------------------ #
-    # Candidates                                                           #
+    # Candidates: jobs/{job_id}/candidates/{id}                            #
+    # Both the parent job and the candidate itself must be owned.         #
     # ------------------------------------------------------------------ #
 
     def _candidate_ref(self, job_id: str, candidate_id: Optional[str] = None):
-        return self._db.collection("jobs").document(job_id).collection("candidates").document(candidate_id)
+        return self._job_ref(job_id).collection("candidates").document(candidate_id)
 
-    def create_candidate(self, job_id: str, data: dict, cv: Optional[CvFile] = None) -> dict:
-        """Save a job candidate (and its original CV file, if given) atomically."""
+    def _owned_candidate_ref(self, owner_id: str, job_id: str, candidate_id: str):
+        """The candidate's ref if it and its job belong to owner_id, else None."""
+        if self._owned(self._job_ref(job_id), owner_id) is None:
+            return None
+        ref = self._candidate_ref(job_id, candidate_id)
+        return ref if self._owned(ref, owner_id) is not None else None
+
+    def create_candidate(
+        self, owner_id: str, job_id: str, data: dict, cv: Optional[CvFile] = None
+    ) -> Optional[dict]:
+        """Save a job candidate (and its original CV file, if given) atomically.
+        None if the job doesn't belong to owner_id."""
+        if self._owned(self._job_ref(job_id), owner_id) is None:
+            return None
         data["job_id"] = job_id
         data["created_at"] = datetime.now(timezone.utc)
+        data[OWNER_FIELD] = owner_id
         ref = self._candidate_ref(job_id)
         self._create_with_cv(ref, data, cv)
         return {"id": ref.id, **data}
 
-    def get_candidate(self, job_id: str, candidate_id: str) -> Optional[dict]:
-        doc = (
-            self._db.collection("jobs")
-            .document(job_id)
-            .collection("candidates")
-            .document(candidate_id)
-            .get()
-        )
-        return {"id": doc.id, **doc.to_dict()} if doc.exists else None
+    def get_candidate(self, owner_id: str, job_id: str, candidate_id: str) -> Optional[dict]:
+        ref = self._owned_candidate_ref(owner_id, job_id, candidate_id)
+        if ref is None:
+            return None
+        doc = ref.get()
+        return {"id": doc.id, **doc.to_dict()}
 
-    def list_candidates(self, job_id: str) -> list[dict]:
-        docs = (
-            self._db.collection("jobs")
-            .document(job_id)
-            .collection("candidates")
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
-        return [{"id": d.id, **d.to_dict()} for d in docs]
+    def list_candidates(self, owner_id: str, job_id: str) -> list[dict]:
+        if self._owned(self._job_ref(job_id), owner_id) is None:
+            return []
+        docs = self._job_ref(job_id).collection("candidates").stream()
+        return _newest_first([
+            {"id": d.id, **d.to_dict()}
+            for d in docs
+            if (d.to_dict() or {}).get(OWNER_FIELD) == owner_id
+        ])
 
-    def list_all_candidates(self) -> list[dict]:
-        """Every candidate across all jobs (collection-group query, no index needed)."""
-        docs = self._db.collection_group("candidates").stream()
+    def list_all_candidates(self, owner_id: str) -> list[dict]:
+        """Every candidate of the tenant across all jobs.
+
+        Collection-group query filtered by owner_id: needs the collection-group
+        single-field index declared in firestore.indexes.json.
+        """
+        docs = self._owned_query(self._db.collection_group("candidates"), owner_id).stream()
         results = []
         for d in docs:
             data = d.to_dict() or {}
@@ -130,19 +209,18 @@ class FirestoreService:
         return results
 
     def update_candidate(
-        self, job_id: str, candidate_id: str, data: dict
+        self, owner_id: str, job_id: str, candidate_id: str, data: dict
     ) -> Optional[dict]:
-        ref = (
-            self._db.collection("jobs")
-            .document(job_id)
-            .collection("candidates")
-            .document(candidate_id)
-        )
-        if not ref.get().exists:
-            return None
-        ref.update(data)
-        updated = ref.get()
-        return {"id": updated.id, **updated.to_dict()}
+        ref = self._owned_candidate_ref(owner_id, job_id, candidate_id)
+        return self._update_owned(ref, owner_id, data) if ref is not None else None
+
+    def delete_candidate(self, owner_id: str, job_id: str, candidate_id: str) -> bool:
+        ref = self._owned_candidate_ref(owner_id, job_id, candidate_id)
+        if ref is None:
+            return False
+        self._delete_cv_chunks(ref)
+        ref.delete()
+        return True
 
     # ------------------------------------------------------------------ #
     # Talent pool (top-level; CVs not tied to a job)                       #
@@ -152,36 +230,29 @@ class FirestoreService:
 
     _TALENT_POOL = "talent_pool"
 
-    def create_pool_candidate(self, data: dict, cv: Optional[CvFile] = None) -> dict:
+    def _pool_ref(self, candidate_id: str):
+        return self._db.collection(self._TALENT_POOL).document(candidate_id)
+
+    def create_pool_candidate(self, owner_id: str, data: dict, cv: Optional[CvFile] = None) -> dict:
         """Save a talent-pool entry (and its original CV file, if given) atomically."""
         data["created_at"] = datetime.now(timezone.utc)
-        ref = self._db.collection(self._TALENT_POOL).document()
+        ref, data = self._create_owned(self._TALENT_POOL, owner_id, data)
         self._create_with_cv(ref, data, cv)
         return {"id": ref.id, **data}
 
-    def get_pool_candidate(self, candidate_id: str) -> Optional[dict]:
-        doc = self._db.collection(self._TALENT_POOL).document(candidate_id).get()
-        return {"id": doc.id, **doc.to_dict()} if doc.exists else None
+    def get_pool_candidate(self, owner_id: str, candidate_id: str) -> Optional[dict]:
+        snap = self._owned(self._pool_ref(candidate_id), owner_id)
+        return {"id": snap.id, **snap.to_dict()} if snap else None
 
-    def list_pool_candidates(self) -> list[dict]:
-        docs = (
-            self._db.collection(self._TALENT_POOL)
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
-        return [{"id": d.id, **d.to_dict()} for d in docs]
+    def list_pool_candidates(self, owner_id: str) -> list[dict]:
+        return self._list_owned(self._TALENT_POOL, owner_id)
 
-    def update_pool_candidate(self, candidate_id: str, data: dict) -> Optional[dict]:
-        ref = self._db.collection(self._TALENT_POOL).document(candidate_id)
-        if not ref.get().exists:
-            return None
-        ref.update(data)
-        updated = ref.get()
-        return {"id": updated.id, **updated.to_dict()}
+    def update_pool_candidate(self, owner_id: str, candidate_id: str, data: dict) -> Optional[dict]:
+        return self._update_owned(self._pool_ref(candidate_id), owner_id, data)
 
-    def delete_pool_candidate(self, candidate_id: str) -> bool:
-        ref = self._db.collection(self._TALENT_POOL).document(candidate_id)
-        if not ref.get().exists:
+    def delete_pool_candidate(self, owner_id: str, candidate_id: str) -> bool:
+        ref = self._pool_ref(candidate_id)
+        if self._owned(ref, owner_id) is None:
             return False
         self._delete_cv_chunks(ref)
         ref.delete()
@@ -205,8 +276,8 @@ class FirestoreService:
         batch.commit()
 
     def _set_cv(self, ref, cv: CvFile) -> Optional[dict]:
-        """Attach (or replace) a record's CV in one atomic batch. None if the record doesn't exist."""
-        if not ref.get().exists:
+        """Attach (or replace) a record's CV in one atomic batch. The caller checked ownership."""
+        if ref is None or not ref.get().exists:
             return None
         batch = self._db.batch()
         self._write_chunks(batch, ref.collection(self._CV_CHUNKS), cv.data)
@@ -215,6 +286,8 @@ class FirestoreService:
         return {"id": ref.id, **ref.get().to_dict()}
 
     def _get_cv(self, ref) -> Optional[CvFile]:
+        if ref is None:
+            return None
         doc = ref.get()
         meta = (doc.to_dict() or {}).get("cv_file") if doc.exists else None
         if not isinstance(meta, dict):
@@ -225,17 +298,23 @@ class FirestoreService:
             return None
         return CvFile(meta=meta, data=data)
 
-    def get_candidate_cv(self, job_id: str, candidate_id: str) -> Optional[CvFile]:
-        return self._get_cv(self._candidate_ref(job_id, candidate_id))
+    def get_candidate_cv(self, owner_id: str, job_id: str, candidate_id: str) -> Optional[CvFile]:
+        return self._get_cv(self._owned_candidate_ref(owner_id, job_id, candidate_id))
 
-    def set_candidate_cv(self, job_id: str, candidate_id: str, cv: CvFile) -> Optional[dict]:
-        return self._set_cv(self._candidate_ref(job_id, candidate_id), cv)
+    def set_candidate_cv(
+        self, owner_id: str, job_id: str, candidate_id: str, cv: CvFile
+    ) -> Optional[dict]:
+        return self._set_cv(self._owned_candidate_ref(owner_id, job_id, candidate_id), cv)
 
-    def get_pool_cv(self, candidate_id: str) -> Optional[CvFile]:
-        return self._get_cv(self._db.collection(self._TALENT_POOL).document(candidate_id))
+    def _owned_pool_ref(self, owner_id: str, candidate_id: str):
+        ref = self._pool_ref(candidate_id)
+        return ref if self._owned(ref, owner_id) is not None else None
 
-    def set_pool_cv(self, candidate_id: str, cv: CvFile) -> Optional[dict]:
-        return self._set_cv(self._db.collection(self._TALENT_POOL).document(candidate_id), cv)
+    def get_pool_cv(self, owner_id: str, candidate_id: str) -> Optional[CvFile]:
+        return self._get_cv(self._owned_pool_ref(owner_id, candidate_id))
+
+    def set_pool_cv(self, owner_id: str, candidate_id: str, cv: CvFile) -> Optional[dict]:
+        return self._set_cv(self._owned_pool_ref(owner_id, candidate_id), cv)
 
     @classmethod
     def _delete_cv_chunks(cls, record_ref) -> None:
@@ -262,97 +341,119 @@ class FirestoreService:
         return b"".join(bytes(c.get("data") or b"") for c in parts)
 
     # ------------------------------------------------------------------ #
-    # Annual budgets: annual_budgets/{year} + events subcollection         #
+    # Annual budgets: annual_budgets/{owner}__{year} + events subcollection #
     # ------------------------------------------------------------------ #
 
     _BUDGETS = "annual_budgets"
 
-    def _budget_ref(self, year: int):
-        return self._db.collection(self._BUDGETS).document(str(year))
+    @staticmethod
+    def budget_doc_id(owner_id: str, year: int) -> str:
+        return f"{check_owner_id(owner_id)}__{int(year)}"
 
-    def list_budget_years(self) -> list[dict]:
+    def _budget_ref(self, owner_id: str, year: int):
+        return self._db.collection(self._BUDGETS).document(self.budget_doc_id(owner_id, year))
+
+    def list_budget_years(self, owner_id: str) -> list[dict]:
+        docs = self._owned_query(self._db.collection(self._BUDGETS), owner_id).stream()
         return [
-            {**d.to_dict(), "year": int(d.id)}
-            for d in self._db.collection(self._BUDGETS).stream()
-            if d.id.isdigit()
+            {**d.to_dict(), "year": int(d.to_dict()["year"])}
+            for d in docs
+            if str((d.to_dict() or {}).get("year", "")).isdigit()
         ]
 
-    def get_budget_year(self, year: int) -> Optional[dict]:
-        doc = self._budget_ref(year).get()
-        return {**doc.to_dict(), "year": year} if doc.exists else None
+    def get_budget_year(self, owner_id: str, year: int) -> Optional[dict]:
+        snap = self._owned(self._budget_ref(owner_id, year), owner_id)
+        return {**snap.to_dict(), "year": year} if snap else None
 
-    def create_budget_year(self, year: int, data: dict) -> Optional[dict]:
+    def create_budget_year(self, owner_id: str, year: int, data: dict) -> Optional[dict]:
         """None if the year already exists (create() fails atomically, no overwrite)."""
         from google.api_core.exceptions import AlreadyExists
 
         now = datetime.now(timezone.utc)
-        data = {**data, "created_at": now, "updated_at": now}
-        data.pop("year", None)
+        data = {**data, "year": int(year), OWNER_FIELD: check_owner_id(owner_id),
+                "created_at": now, "updated_at": now}
         try:
-            self._budget_ref(year).create(data)
+            self._budget_ref(owner_id, year).create(data)
         except AlreadyExists:
             return None
-        return {**data, "year": year}
+        return data
 
-    def update_budget_year(self, year: int, data: dict) -> Optional[dict]:
-        ref = self._budget_ref(year)
-        if not ref.get().exists:
+    def update_budget_year(self, owner_id: str, year: int, data: dict) -> Optional[dict]:
+        ref = self._budget_ref(owner_id, year)
+        data = {k: v for k, v in data.items() if k not in ("year", OWNER_FIELD)}
+        saved = self._update_owned(ref, owner_id, {**data, "updated_at": datetime.now(timezone.utc)})
+        if saved is None:
             return None
-        ref.update({**data, "updated_at": datetime.now(timezone.utc)})
-        return {**ref.get().to_dict(), "year": year}
+        saved.pop("id", None)
+        return {**saved, "year": year}
 
-    def delete_budget_year(self, year: int) -> bool:
-        ref = self._budget_ref(year)
-        if not ref.get().exists:
+    def delete_budget_year(self, owner_id: str, year: int) -> bool:
+        ref = self._budget_ref(owner_id, year)
+        if self._owned(ref, owner_id) is None:
             return False
-        for event in ref.collection("events").stream():
-            self._delete_expenses(event.reference)
-            event.reference.delete()
-        ref.delete()
+        self._delete_budget_tree(ref)
         return True
 
-    def _event_ref(self, year: int, event_id: str):
-        return self._budget_ref(year).collection("events").document(event_id)
+    def _delete_budget_tree(self, budget_ref) -> None:
+        for event in budget_ref.collection("events").stream():
+            self._delete_expenses(event.reference)
+            event.reference.delete()
+        budget_ref.delete()
 
-    def get_budget_event(self, year: int, event_id: str) -> Optional[dict]:
-        doc = self._event_ref(year, event_id).get()
+    # Events and expenses live under the owner-prefixed budget document, so the
+    # path itself scopes them to the tenant.
+
+    def _event_ref(self, owner_id: str, year: int, event_id: str):
+        return self._budget_ref(owner_id, year).collection("events").document(event_id)
+
+    def get_budget_event(self, owner_id: str, year: int, event_id: str) -> Optional[dict]:
+        doc = self._event_ref(owner_id, year, event_id).get()
         return {"id": doc.id, **doc.to_dict()} if doc.exists else None
 
-    def list_budget_events(self, year: int) -> list[dict]:
-        return [{"id": d.id, **d.to_dict()} for d in self._budget_ref(year).collection("events").stream()]
+    def list_budget_events(self, owner_id: str, year: int) -> list[dict]:
+        col = self._budget_ref(owner_id, year).collection("events")
+        return [{"id": d.id, **d.to_dict()} for d in col.stream()]
 
-    def create_budget_event(self, year: int, data: dict) -> dict:
+    def create_budget_event(self, owner_id: str, year: int, data: dict) -> Optional[dict]:
+        """None if the tenant has no budget for that year."""
+        budget_ref = self._budget_ref(owner_id, year)
+        if self._owned(budget_ref, owner_id) is None:
+            return None
         now = datetime.now(timezone.utc)
         data = {**data, "created_at": now, "updated_at": now}
-        ref = self._budget_ref(year).collection("events").document()
+        ref = budget_ref.collection("events").document()
         ref.set(data)
         return {"id": ref.id, **data}
 
-    def update_budget_event(self, year: int, event_id: str, data: dict) -> Optional[dict]:
-        ref = self._event_ref(year, event_id)
+    def update_budget_event(
+        self, owner_id: str, year: int, event_id: str, data: dict
+    ) -> Optional[dict]:
+        ref = self._event_ref(owner_id, year, event_id)
         if not ref.get().exists:
             return None
         ref.update({**data, "updated_at": datetime.now(timezone.utc)})
         return {"id": event_id, **ref.get().to_dict()}
 
-    def delete_budget_event(self, year: int, event_id: str) -> bool:
-        ref = self._event_ref(year, event_id)
+    def delete_budget_event(self, owner_id: str, year: int, event_id: str) -> bool:
+        ref = self._event_ref(owner_id, year, event_id)
         if not ref.get().exists:
             return False
         self._delete_expenses(ref)
         ref.delete()
         return True
 
-    # Itemized expenses: annual_budgets/{year}/events/{event_id}/expenses/{id}.
+    # Itemized expenses: .../events/{event_id}/expenses/{id}.
     # Every write re-derives the event's actual_spent and expenses_count.
 
-    def list_event_expenses(self, year: int, event_id: str) -> list[dict]:
-        docs = self._event_ref(year, event_id).collection("expenses").stream()
+    def list_event_expenses(self, owner_id: str, year: int, event_id: str) -> list[dict]:
+        docs = self._event_ref(owner_id, year, event_id).collection("expenses").stream()
         return [{"id": d.id, **d.to_dict()} for d in docs]
 
-    def create_event_expense(self, year: int, event_id: str, data: dict) -> Optional[dict]:
+    def create_event_expense(
+        self, owner_id: str, year: int, event_id: str, data: dict
+    ) -> Optional[dict]:
         """None if the event doesn't exist."""
-        event_ref = self._event_ref(year, event_id)
+        event_ref = self._event_ref(owner_id, year, event_id)
         if not event_ref.get().exists:
             return None
         now = datetime.now(timezone.utc)
@@ -363,9 +464,9 @@ class FirestoreService:
         return {"id": ref.id, **data}
 
     def update_event_expense(
-        self, year: int, event_id: str, expense_id: str, data: dict
+        self, owner_id: str, year: int, event_id: str, expense_id: str, data: dict
     ) -> Optional[dict]:
-        event_ref = self._event_ref(year, event_id)
+        event_ref = self._event_ref(owner_id, year, event_id)
         ref = event_ref.collection("expenses").document(expense_id)
         if not ref.get().exists:
             return None
@@ -373,8 +474,8 @@ class FirestoreService:
         self._sync_event_spent(event_ref)
         return {"id": expense_id, **ref.get().to_dict()}
 
-    def delete_event_expense(self, year: int, event_id: str, expense_id: str) -> bool:
-        event_ref = self._event_ref(year, event_id)
+    def delete_event_expense(self, owner_id: str, year: int, event_id: str, expense_id: str) -> bool:
+        event_ref = self._event_ref(owner_id, year, event_id)
         ref = event_ref.collection("expenses").document(expense_id)
         if not ref.get().exists:
             return False
@@ -386,14 +487,14 @@ class FirestoreService:
     # Uploaded invoice file of an expense: metadata in the expense's invoice_file
     # field, raw bytes in .../invoice_chunks/{0000, 0001, ...}
 
-    def _expense_ref(self, year: int, event_id: str, expense_id: str):
-        return self._event_ref(year, event_id).collection("expenses").document(expense_id)
+    def _expense_ref(self, owner_id: str, year: int, event_id: str, expense_id: str):
+        return self._event_ref(owner_id, year, event_id).collection("expenses").document(expense_id)
 
     def set_expense_invoice(
-        self, year: int, event_id: str, expense_id: str, meta: dict, data: bytes
+        self, owner_id: str, year: int, event_id: str, expense_id: str, meta: dict, data: bytes
     ) -> Optional[dict]:
         """Store (or replace) the invoice in one atomic batch. None if the expense doesn't exist."""
-        ref = self._expense_ref(year, event_id, expense_id)
+        ref = self._expense_ref(owner_id, year, event_id, expense_id)
         if not ref.get().exists:
             return None
         batch = self._db.batch()
@@ -404,10 +505,10 @@ class FirestoreService:
         return {"id": expense_id, **ref.get().to_dict()}
 
     def get_expense_invoice(
-        self, year: int, event_id: str, expense_id: str
+        self, owner_id: str, year: int, event_id: str, expense_id: str
     ) -> Optional[tuple[dict, bytes]]:
         """(metadata, bytes), or None if the expense or its file doesn't exist."""
-        ref = self._expense_ref(year, event_id, expense_id)
+        ref = self._expense_ref(owner_id, year, event_id, expense_id)
         doc = ref.get()
         meta = (doc.to_dict() or {}).get("invoice_file") if doc.exists else None
         if not isinstance(meta, dict):
@@ -418,8 +519,10 @@ class FirestoreService:
             return None
         return meta, data
 
-    def delete_expense_invoice(self, year: int, event_id: str, expense_id: str) -> Optional[dict]:
-        ref = self._expense_ref(year, event_id, expense_id)
+    def delete_expense_invoice(
+        self, owner_id: str, year: int, event_id: str, expense_id: str
+    ) -> Optional[dict]:
+        ref = self._expense_ref(owner_id, year, event_id, expense_id)
         if not ref.get().exists:
             return None
         self._delete_invoice_chunks(ref)
@@ -452,47 +555,125 @@ class FirestoreService:
 
     _MATERNITY = "maternity_leaves"
 
-    def create_maternity_leave(self, data: dict) -> dict:
+    def create_maternity_leave(self, owner_id: str, data: dict) -> dict:
         now = datetime.now(timezone.utc)
         data["created_at"] = now
         data["updated_at"] = now
-        ref = self._db.collection(self._MATERNITY).document()
+        ref, data = self._create_owned(self._MATERNITY, owner_id, data)
         ref.set(data)
         return {"id": ref.id, **data}
 
-    def list_maternity_leaves(self) -> list[dict]:
-        docs = (
-            self._db.collection(self._MATERNITY)
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
-        return [{"id": d.id, **d.to_dict()} for d in docs]
+    def list_maternity_leaves(self, owner_id: str) -> list[dict]:
+        return self._list_owned(self._MATERNITY, owner_id)
 
-    def update_maternity_leave(self, record_id: str, data: dict) -> Optional[dict]:
+    def update_maternity_leave(self, owner_id: str, record_id: str, data: dict) -> Optional[dict]:
         ref = self._db.collection(self._MATERNITY).document(record_id)
-        if not ref.get().exists:
-            return None
-        ref.update({**data, "updated_at": datetime.now(timezone.utc)})
-        updated = ref.get()
-        return {"id": updated.id, **updated.to_dict()}
+        return self._update_owned(ref, owner_id, {**data, "updated_at": datetime.now(timezone.utc)})
 
-    def delete_maternity_leave(self, record_id: str) -> bool:
+    def delete_maternity_leave(self, owner_id: str, record_id: str) -> bool:
         ref = self._db.collection(self._MATERNITY).document(record_id)
-        if not ref.get().exists:
+        if self._owned(ref, owner_id) is None:
             return False
         ref.delete()
         return True
 
     # ------------------------------------------------------------------ #
+    # Settings documents: settings/{owner}__{name}                         #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def settings_doc_id(owner_id: str, name: str) -> str:
+        return f"{check_owner_id(owner_id)}__{name}"
+
+    def get_settings_doc(self, owner_id: str, name: str) -> dict:
+        doc = self._db.collection("settings").document(self.settings_doc_id(owner_id, name)).get()
+        if not doc.exists:
+            return {}
+        data = doc.to_dict() or {}
+        data.pop(OWNER_FIELD, None)
+        return data
+
+    def set_settings_doc(self, owner_id: str, name: str, data: dict) -> dict:
+        self._db.collection("settings").document(self.settings_doc_id(owner_id, name)).set(
+            {**data, OWNER_FIELD: owner_id}
+        )
+        return data
+
+    # ------------------------------------------------------------------ #
+    # Wiping a whole tenant (used only for the demo reset)                 #
+    # ------------------------------------------------------------------ #
+
+    def delete_tenant_data(self, owner_id: str) -> dict[str, int]:
+        """Delete every business record of one tenant. Users and the tenant doc are kept.
+
+        Only touches documents matched by ``owner_id == owner_id`` (or under such
+        a document), so other tenants are never affected.
+        """
+        check_owner_id(owner_id)
+        counts = {"jobs": 0, "candidates": 0, "talent_pool": 0, "maternity_leaves": 0,
+                  "annual_budgets": 0, "settings": 0}
+
+        for job in self._owned_query(self._db.collection(self._JOBS), owner_id).stream():
+            for cand in job.reference.collection("candidates").stream():
+                self._delete_cv_chunks(cand.reference)
+                cand.reference.delete()
+                counts["candidates"] += 1
+            job.reference.delete()
+            counts["jobs"] += 1
+        # Candidates of this tenant left under some other job (shouldn't exist)
+        for cand in self._owned_query(self._db.collection_group("candidates"), owner_id).stream():
+            self._delete_cv_chunks(cand.reference)
+            cand.reference.delete()
+            counts["candidates"] += 1
+        for name, key in ((self._TALENT_POOL, "talent_pool"), (self._MATERNITY, "maternity_leaves")):
+            for doc in self._owned_query(self._db.collection(name), owner_id).stream():
+                self._delete_cv_chunks(doc.reference)
+                doc.reference.delete()
+                counts[key] += 1
+        for doc in self._owned_query(self._db.collection(self._BUDGETS), owner_id).stream():
+            self._delete_budget_tree(doc.reference)
+            counts["annual_budgets"] += 1
+        for doc in self._owned_query(self._db.collection("settings"), owner_id).stream():
+            doc.reference.delete()
+            counts["settings"] += 1
+        return counts
+
+    def tenant_has_data(self, owner_id: str) -> bool:
+        for name in (self._JOBS, self._TALENT_POOL, self._MATERNITY, self._BUDGETS):
+            if any(True for _ in self._owned_query(self._db.collection(name), owner_id).stream()):
+                return True
+        return False
+
+    # ------------------------------------------------------------------ #
+    # Tenants (workspaces): tenants/{tenant_id}                            #
+    # ------------------------------------------------------------------ #
+
+    def get_tenant(self, tenant_id: str) -> Optional[dict]:
+        doc = self._db.collection("tenants").document(check_owner_id(tenant_id)).get()
+        return {"id": doc.id, **doc.to_dict()} if doc.exists else None
+
+    def set_tenant(self, tenant_id: str, data: dict) -> dict:
+        self._db.collection("tenants").document(check_owner_id(tenant_id)).set(data)
+        return {"id": tenant_id, **data}
+
+    def list_tenants(self) -> list[dict]:
+        return [{"id": d.id, **d.to_dict()} for d in self._db.collection("tenants").stream()]
+
+    # ------------------------------------------------------------------ #
     # Users (document id = lower-cased email)                              #
+    # The users collection is global (login looks a user up by email);    #
+    # listing and counting are scoped to one workspace by tenant_id.       #
     # ------------------------------------------------------------------ #
 
     def get_user(self, email: str) -> Optional[dict]:
         doc = self._db.collection("users").document(email).get()
         return {"email": doc.id, **doc.to_dict()} if doc.exists else None
 
-    def list_users(self) -> list[dict]:
-        return [{"email": d.id, **d.to_dict()} for d in self._db.collection("users").stream()]
+    def list_users(self, tenant_id: str) -> list[dict]:
+        query = self._db.collection("users").where(
+            filter=FieldFilter("tenant_id", "==", check_owner_id(tenant_id))
+        )
+        return [{"email": d.id, **d.to_dict()} for d in query.stream()]
 
     def set_user(self, email: str, data: dict) -> dict:
         self._db.collection("users").document(email).set(data)
@@ -523,32 +704,11 @@ class FirestoreService:
     def delete_password_reset(self, email: str) -> None:
         self._db.collection("password_resets").document(email).delete()
 
-    def count_admins(self) -> int:
+    def count_admins(self, tenant_id: str) -> int:
         docs = (
             self._db.collection("users")
+            .where(filter=FieldFilter("tenant_id", "==", check_owner_id(tenant_id)))
             .where(filter=FieldFilter("role", "==", "admin"))
             .stream()
         )
         return sum(1 for _ in docs)
-
-    # ------------------------------------------------------------------ #
-    # Settings documents                                                   #
-    # ------------------------------------------------------------------ #
-
-    def get_settings_doc(self, name: str) -> dict:
-        doc = self._db.collection("settings").document(name).get()
-        if not doc.exists:
-            return {}
-        return doc.to_dict() or {}
-
-    def set_settings_doc(self, name: str, data: dict) -> dict:
-        self._db.collection("settings").document(name).set(data)
-        return data
-
-    def delete_candidate(self, job_id: str, candidate_id: str) -> bool:
-        ref = self._candidate_ref(job_id, candidate_id)
-        if not ref.get().exists:
-            return False
-        self._delete_cv_chunks(ref)
-        ref.delete()
-        return True

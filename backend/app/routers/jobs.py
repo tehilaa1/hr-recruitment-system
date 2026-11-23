@@ -10,7 +10,9 @@ from fastapi import status as http_status
 from app.dependencies import get_firestore_service, get_gemini_service
 from app.models.job import JobCreate, JobResponse, JobUpdate
 from app.models.talent_pool import PoolMatch
+from app.security import AuthUser
 from app.services.dedup_service import exclude_existing
+from app.services.demo_limits import check_demo_record_cap, consume_demo_ai
 from app.services.export_service import XLSX_MEDIA_TYPE, content_disposition, generate_xlsx
 from app.services.firestore_service import FirestoreService
 from app.services.gemini_service import GeminiParseError, GeminiService
@@ -29,17 +31,20 @@ AI = Annotated[GeminiService, Depends(get_gemini_service)]
 
 
 @router.post("", response_model=JobResponse, status_code=http_status.HTTP_201_CREATED)
-async def create_job(payload: JobCreate, db: DB):
-    result = await asyncio.to_thread(db.create_job, payload.model_dump())
+async def create_job(payload: JobCreate, user: AuthUser, db: DB):
+    if user.is_demo:
+        existing = await asyncio.to_thread(db.list_jobs, user.tenant_id)
+        check_demo_record_cap(user, len(existing))
+    result = await asyncio.to_thread(db.create_job, user.tenant_id, payload.model_dump())
     result["candidate_count"] = 0
     return result
 
 
 @router.get("", response_model=list[JobResponse])
-async def list_jobs(db: DB):
-    jobs = await asyncio.to_thread(db.list_jobs)
+async def list_jobs(user: AuthUser, db: DB):
+    jobs = await asyncio.to_thread(db.list_jobs, user.tenant_id)
     counts = await asyncio.gather(
-        *[asyncio.to_thread(db.get_candidate_count, j["id"]) for j in jobs]
+        *[asyncio.to_thread(db.get_candidate_count, user.tenant_id, j["id"]) for j in jobs]
     )
     for job, count in zip(jobs, counts):
         job["candidate_count"] = count
@@ -47,29 +52,29 @@ async def list_jobs(db: DB):
 
 
 @router.get("/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str, db: DB):
-    job = await asyncio.to_thread(db.get_job, job_id)
+async def get_job(job_id: str, user: AuthUser, db: DB):
+    job = await asyncio.to_thread(db.get_job, user.tenant_id, job_id)
     _assert_job(job, job_id)
-    job["candidate_count"] = await asyncio.to_thread(db.get_candidate_count, job_id)
+    job["candidate_count"] = await asyncio.to_thread(db.get_candidate_count, user.tenant_id, job_id)
     return job
 
 
 @router.put("/{job_id}", response_model=JobResponse)
-async def update_job(job_id: str, payload: JobUpdate, db: DB):
+async def update_job(job_id: str, payload: JobUpdate, user: AuthUser, db: DB):
     update_data = payload.model_dump(exclude_none=True)
     if not update_data:
         raise HTTPException(
             http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update"
         )
-    result = await asyncio.to_thread(db.update_job, job_id, update_data)
+    result = await asyncio.to_thread(db.update_job, user.tenant_id, job_id, update_data)
     _assert_job(result, job_id)
-    result["candidate_count"] = await asyncio.to_thread(db.get_candidate_count, job_id)
+    result["candidate_count"] = await asyncio.to_thread(db.get_candidate_count, user.tenant_id, job_id)
     return result
 
 
 @router.delete("/{job_id}", status_code=http_status.HTTP_204_NO_CONTENT)
-async def delete_job(job_id: str, db: DB):
-    deleted = await asyncio.to_thread(db.delete_job, job_id)
+async def delete_job(job_id: str, user: AuthUser, db: DB):
+    deleted = await asyncio.to_thread(db.delete_job, user.tenant_id, job_id)
     if not deleted:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"Job {job_id!r} not found")
 
@@ -81,22 +86,23 @@ async def delete_job(job_id: str, db: DB):
 
 @router.post("/{job_id}/match-pool", response_model=list[PoolMatch])
 async def match_pool_candidates(
-    job_id: str, db: DB, ai: AI, limit: int = Query(5, ge=1, le=10)
+    job_id: str, user: AuthUser, db: DB, ai: AI, limit: int = Query(5, ge=1, le=10)
 ):
     """Suggest talent-pool candidates for this job, with a Hebrew reason for each.
 
     People who already applied to the job (same normalized email/phone) are excluded.
     """
-    job = await asyncio.to_thread(db.get_job, job_id)
+    job = await asyncio.to_thread(db.get_job, user.tenant_id, job_id)
     _assert_job(job, job_id)
 
     pool, applied = await asyncio.gather(
-        asyncio.to_thread(db.list_pool_candidates),
-        asyncio.to_thread(db.list_candidates, job_id),
+        asyncio.to_thread(db.list_pool_candidates, user.tenant_id),
+        asyncio.to_thread(db.list_candidates, user.tenant_id, job_id),
     )
     available = exclude_existing(pool, applied)
     if not available:
         return []
+    consume_demo_ai(user)
 
     try:
         ranked = await asyncio.to_thread(
@@ -122,12 +128,12 @@ async def match_pool_candidates(
 
 
 @router.get("/{job_id}/export-excel")
-async def export_candidates_excel(job_id: str, db: DB):
-    job = await asyncio.to_thread(db.get_job, job_id)
+async def export_candidates_excel(job_id: str, user: AuthUser, db: DB):
+    job = await asyncio.to_thread(db.get_job, user.tenant_id, job_id)
     _assert_job(job, job_id)
 
     try:
-        candidates = await asyncio.to_thread(db.list_candidates, job_id)
+        candidates = await asyncio.to_thread(db.list_candidates, user.tenant_id, job_id)
         xlsx_bytes = await asyncio.to_thread(generate_xlsx, candidates)
     except Exception:
         logger.exception("Excel export failed for job %s", job_id)

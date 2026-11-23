@@ -52,6 +52,18 @@ class Settings(BaseSettings):
     # Testing only: the API also returns the code to the browser. NEVER enable in production.
     SMS_DEV_MODE: bool = False
 
+    # --- Public demo workspace (see scripts/seed_demo_data.py) ---
+    # The demo account lives in its own isolated tenant. Its password is shared
+    # publicly (the login page's demo button), so the tenant holds sample data only.
+    DEMO_EMAIL: str = "demo@hiretrack.app"
+    DEMO_PASSWORD: Optional[str] = None  # only needed by the seed script / reset endpoint
+    DEMO_TENANT_ID: str = "demo"
+    # Free-tier protection for the demo tenant only
+    DEMO_AI_DAILY_LIMIT: int = 20           # Gemini calls (CV parses + pool matching) per day
+    DEMO_MAX_UPLOAD_BYTES: int = 2 * 1024 * 1024
+    DEMO_MAX_FILES_PER_UPLOAD: int = 5
+    DEMO_MAX_RECORDS: int = 150             # per collection (jobs, candidates, pool, maternity)
+
     # Accepts a JSON list or a comma-separated string, e.g.
     # CORS_ORIGINS=https://my-frontend.onrender.com,https://hr.example.com
     # Local dev origins are always added on top.

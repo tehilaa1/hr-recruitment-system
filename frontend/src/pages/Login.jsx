@@ -1,8 +1,14 @@
 import { useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Briefcase, Loader2, LogIn } from 'lucide-react';
+import { AlertTriangle, Briefcase, FlaskConical, Loader2, LogIn } from 'lucide-react';
 import { firebaseErrorMessage, useAuth } from '../auth/AuthContext';
 import { isFirebaseConfigured } from '../firebase';
+
+// Public demo account (sandbox workspace with sample data). Both values end up in the
+// built JS bundle — that's intended: the account is shared and holds only fake data.
+const DEMO_EMAIL = import.meta.env.VITE_DEMO_EMAIL || '';
+const DEMO_PASSWORD = import.meta.env.VITE_DEMO_PASSWORD || '';
+const hasDemo = Boolean(DEMO_EMAIL && DEMO_PASSWORD);
 
 const inputClass =
   'w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition';
@@ -22,22 +28,34 @@ export default function Login() {
     return <Navigate to={from ? `${from.pathname}${from.search ?? ''}` : '/'} replace />;
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (!email.trim() || !password) {
-      setError('יש להזין מייל וסיסמה');
-      return;
-    }
+  const signIn = async (signInEmail, signInPassword) => {
     setSubmitting(true);
     try {
-      await login(email, password);
+      await login(signInEmail, signInPassword);
       // On success, AuthProvider checks authorization and this page redirects
     } catch (err) {
       setError(firebaseErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setError('');
+    if (!email.trim() || !password) {
+      setError('יש להזין מייל וסיסמה');
+      return;
+    }
+    signIn(email, password);
+  };
+
+  // Fills in the shared demo credentials (visible to the user) and signs in
+  const handleDemo = () => {
+    setError('');
+    setEmail(DEMO_EMAIL);
+    setPassword(DEMO_PASSWORD);
+    signIn(DEMO_EMAIL, DEMO_PASSWORD);
   };
 
   // SMS-verified reset flow; carries over the email typed here
@@ -124,6 +142,21 @@ export default function Login() {
               >
                 שכחתי סיסמה
               </button>
+
+              {hasDemo && (
+                <div className="pt-4 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={handleDemo}
+                    disabled={busy}
+                    className="w-full flex items-center justify-center gap-2 border border-amber-300 bg-amber-50 hover:bg-amber-100 disabled:opacity-60 text-amber-800 rounded-xl py-2.5 text-sm font-semibold transition-colors"
+                  >
+                    <FlaskConical className="h-4 w-4" />
+                    כניסה לחשבון הדגמה
+                  </button>
+                  <p className="text-xs text-gray-400 text-center mt-2">סביבה לדוגמה עם נתונים בדויים</p>
+                </div>
+              )}
             </form>
           )}
         </div>

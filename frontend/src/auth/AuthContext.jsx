@@ -16,7 +16,7 @@ const AuthContext = createContext(null);
  * collection. Until that check passes, the user is treated as signed out.
  */
 export function AuthProvider({ children }) {
-  const [profile, setProfile] = useState(null); // { email, display_name, role, ... }
+  const [profile, setProfile] = useState(null); // { email, display_name, role, tenant_id, is_demo, ... }
   const [loading, setLoading] = useState(Boolean(auth));
   const [authError, setAuthError] = useState('');
 
@@ -55,7 +55,9 @@ export function AuthProvider({ children }) {
       profile,
       loading,
       authError,
-      isAdmin: profile?.role === 'admin',
+      // The shared demo account never gets admin screens (the backend refuses them too)
+      isAdmin: profile?.role === 'admin' && !profile?.is_demo,
+      isDemo: Boolean(profile?.is_demo),
       login: async (email, password) => {
         setAuthError('');
         await signInWithEmailAndPassword(auth, email.trim(), password);

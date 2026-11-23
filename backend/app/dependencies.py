@@ -42,4 +42,5 @@ def get_password_reset_service():
         set_password=auth_service.set_password,
         revoke_sessions=auth_service.revoke_sessions,
         dev_mode=get_settings().SMS_DEV_MODE,
+        locked_tenant_ids=(get_settings().DEMO_TENANT_ID,),
     )

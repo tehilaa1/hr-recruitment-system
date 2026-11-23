@@ -84,6 +84,7 @@ class PasswordResetService:
         revoke_sessions: Callable[[str], None] = lambda uid: None,
         dev_mode: bool = False,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        locked_tenant_ids: tuple[str, ...] = (),
     ) -> None:
         self._store = store
         self._sms = sms
@@ -91,6 +92,11 @@ class PasswordResetService:
         self._revoke = revoke_sessions
         self._dev_mode = dev_mode
         self._now = now
+        # Workspaces whose accounts may never reset a password (the shared demo account)
+        self._locked_tenants = frozenset(locked_tenant_ids)
+
+    def _locked(self, user: Optional[dict]) -> bool:
+        return bool(user) and user.get("tenant_id") in self._locked_tenants
 
     # ------------------------------------------------------------------ #
     # 1. Send a code                                                       #
@@ -101,6 +107,9 @@ class PasswordResetService:
         phone = (user or {}).get("phone") or ""
         if not user or not user.get("uid") or not phone:
             logger.info("Password reset requested for %s: no account or no phone — nothing sent", email)
+            return RequestOutcome(sent=False)
+        if self._locked(user):
+            logger.warning("Password reset requested for locked account %s — nothing sent", email)
             return RequestOutcome(sent=False)
 
         now = self._now()
@@ -200,7 +209,7 @@ class PasswordResetService:
             raise ResetError(_BAD_TOKEN)
 
         user = self._store.get_user(email)
-        if not user or not user.get("uid"):
+        if not user or not user.get("uid") or self._locked(user):
             self._store.delete_password_reset(email)
             raise ResetError(_BAD_TOKEN)
 

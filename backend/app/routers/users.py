@@ -8,6 +8,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
 
+from app.security import CurrentUser, require_admin
+
 from app.dependencies import get_firestore_service, get_password_reset_service
 from app.models.user import (
     PasswordResetConfirm,
@@ -15,13 +17,14 @@ from app.models.user import (
     PasswordResetRequestResult,
     PasswordResetVerify,
     PasswordResetVerifyResult,
+    MeResponse,
     UserCreate,
     UserCreateResult,
     UserResponse,
     UserUpdate,
     normalize_user_email,
 )
-from app.security import AdminUser, AuthUser
+from app.security import AuthUser
 from app.services import auth_service
 from app.services.firestore_service import FirestoreService
 from app.services.password_reset_service import (
@@ -40,13 +43,33 @@ Resets = Annotated[PasswordResetService, Depends(get_password_reset_service)]
 # /api/auth/me – any authorized user
 auth_router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
-# /api/users – admins only (enforced per endpoint via AdminUser)
+# /api/users – workspace admins only (enforced per endpoint via AdminUser).
+# Everything here is scoped to the admin's own workspace (tenant): users of other
+# workspaces are invisible (404), and new users always join the admin's workspace.
 router = APIRouter(prefix="/api/users", tags=["User Management"])
 
 
-@auth_router.get("/me", response_model=UserResponse)
+async def _require_workspace_admin(
+    admin: Annotated[CurrentUser, Depends(require_admin)],
+) -> CurrentUser:
+    # The demo account's password is public: it must never manage accounts
+    if admin.is_demo:
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, "לא זמין בחשבון ההדגמה")
+    return admin
+
+
+AdminUser = Annotated[CurrentUser, Depends(_require_workspace_admin)]
+
+
+@auth_router.get("/me", response_model=MeResponse)
 async def get_me(user: AuthUser, db: DB):
-    return await asyncio.to_thread(db.get_user, user.email)
+    record = await asyncio.to_thread(db.get_user, user.email)
+    return {
+        **record,
+        "tenant_id": user.tenant_id,
+        "is_super_admin": user.is_super_admin,
+        "is_demo": user.is_demo,
+    }
 
 
 # ------------------------------------------------------------------ #
@@ -98,8 +121,8 @@ async def confirm_password_reset(payload: PasswordResetConfirm, resets: Resets):
 
 
 @router.get("", response_model=list[UserResponse])
-async def list_users(_: AdminUser, db: DB):
-    users = await asyncio.to_thread(db.list_users)
+async def list_users(admin: AdminUser, db: DB):
+    users = await asyncio.to_thread(db.list_users, admin.tenant_id)
     return sorted(users, key=lambda u: (u.get("role") != "admin", u["email"]))
 
 
@@ -116,6 +139,8 @@ async def create_user(payload: UserCreate, admin: AdminUser, db: DB):
         "role": payload.role,
         "phone": payload.phone,
         "uid": uid,
+        # Always the admin's own workspace: never taken from the request
+        "tenant_id": admin.tenant_id,
         "created_at": datetime.now(timezone.utc),
         "created_by": admin.email,
     }
@@ -127,7 +152,7 @@ async def create_user(payload: UserCreate, admin: AdminUser, db: DB):
 @router.patch("/{email}", response_model=UserResponse)
 async def update_user(email: str, payload: UserUpdate, admin: AdminUser, db: DB):
     email = normalize_user_email(email)
-    existing = await _get_or_404(db, email)
+    existing = await _get_or_404(db, email, admin)
     update = payload.model_dump(exclude_none=True)
     if not update:
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_ENTITY, "No fields to update")
@@ -135,7 +160,7 @@ async def update_user(email: str, payload: UserUpdate, admin: AdminUser, db: DB)
     if "role" in update and update["role"] != existing["role"]:
         if email == admin.email:
             raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "לא ניתן לשנות את התפקיד של עצמך")
-        await _ensure_not_last_admin(db, existing)
+        await _ensure_not_last_admin(db, existing, admin)
 
     return await asyncio.to_thread(db.update_user, email, update)
 
@@ -145,8 +170,10 @@ async def delete_user(email: str, admin: AdminUser, db: DB):
     email = normalize_user_email(email)
     if email == admin.email:
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "לא ניתן למחוק את המשתמש של עצמך")
-    existing = await _get_or_404(db, email)
-    await _ensure_not_last_admin(db, existing)
+    existing = await _get_or_404(db, email, admin)
+    if existing.get("is_super_admin") is True:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "לא ניתן למחוק מנהל/ת-על")
+    await _ensure_not_last_admin(db, existing, admin)
 
     await asyncio.to_thread(db.delete_user, email)
     if existing.get("uid"):
@@ -155,13 +182,14 @@ async def delete_user(email: str, admin: AdminUser, db: DB):
     logger.info("User %s removed by %s", email, admin.email)
 
 
-async def _get_or_404(db: FirestoreService, email: str) -> dict:
+async def _get_or_404(db: FirestoreService, email: str, admin: CurrentUser) -> dict:
     user = await asyncio.to_thread(db.get_user, email)
-    if user is None:
+    # A user of another workspace is reported exactly like a missing one
+    if user is None or user.get("tenant_id") != admin.tenant_id:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "משתמש לא נמצא")
     return user
 
 
-async def _ensure_not_last_admin(db: FirestoreService, user: dict) -> None:
-    if user.get("role") == "admin" and await asyncio.to_thread(db.count_admins) <= 1:
+async def _ensure_not_last_admin(db: FirestoreService, user: dict, admin: CurrentUser) -> None:
+    if user.get("role") == "admin" and await asyncio.to_thread(db.count_admins, admin.tenant_id) <= 1:
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "חייב להישאר לפחות מנהל/ת מערכת אחד/ת")
